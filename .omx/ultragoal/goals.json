@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-26T06:59:00.104Z",
-  "updatedAt": "2026-05-26T07:02:11.529Z",
+  "updatedAt": "2026-05-26T08:11:34.128Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -23,11 +23,13 @@
       "id": "G002-rebrand-gajae-gjc",
       "title": "Rebrand package, CLI, TUI, and docs",
       "objective": "Rebrand product to gajae-code and CLI to gjc across package scopes, help text, TUI labels/status, and docs; keep OMP/oh-my-pi only in attribution/history.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 1,
       "createdAt": "2026-05-26T06:59:21Z",
-      "updatedAt": "2026-05-26T07:02:11.529Z",
-      "startedAt": "2026-05-26T07:02:11.529Z"
+      "updatedAt": "2026-05-26T08:11:34.128Z",
+      "startedAt": "2026-05-26T07:02:11.529Z",
+      "completedAt": "2026-05-26T08:11:34.128Z",
+      "evidence": "G002-rebrand-gajae-gjc complete: team implement-gajae-code-ed8bd1b1 terminal with 17/17 tasks completed, 0 failed, 0 in_progress; leader verification passed bun scripts/check-visible-definitions.ts, bun scripts/verify-g002-gates.ts, focused skill/discovery/gjc bridge/help tests, bun run check:rs, and bun run check:ts. Evidence artifacts stored under .omx/verification/g002-* and ultragoal audit recorded in .omx/ultragoal/goals.json plus .omx/ultragoal/ledger.jsonl."
     },
     {
       "id": "G003-visible-definitions-gate",
@@ -84,6 +86,5 @@
       "updatedAt": "2026-05-26T06:59:21Z"
     }
   ],
-  "codexObjective": "Complete the durable gajae-code OMP/OMX runtime plan in .omx/ultragoal/goals.json under the approved RALPLAN constraints; use .omx/ultragoal/ledger.jsonl as audit trail.",
-  "activeGoalId": "G002-rebrand-gajae-gjc"
+  "codexObjective": "Complete the durable gajae-code OMP/OMX runtime plan in .omx/ultragoal/goals.json under the approved RALPLAN constraints; use .omx/ultragoal/ledger.jsonl as audit trail."
 }
