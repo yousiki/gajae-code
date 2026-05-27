@@ -112,6 +112,8 @@ import {
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
+const INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS = 5_000;
+
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 	low: "dim",
 	mid: "muted",
@@ -1937,7 +1939,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// plan) while the popup is showing. The event listener fires asynchronously
 		// (agent's #emit is fire-and-forget), so without this the model sees
 		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
-		await this.session.abort();
+		await this.session.abort({ timeoutMs: INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS });
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;

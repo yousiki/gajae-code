@@ -1414,6 +1414,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		for (const tool of builtinTools) {
 			toolRegistry.set(tool.name, tool);
 		}
+		const goalStateToolNames = ["get_goal", "create_goal", "update_goal"] as const;
+		if (settings.get("goal.enabled")) {
+			for (const name of goalStateToolNames) {
+				if (toolRegistry.has(name)) continue;
+				const goalStateTool = await logger.time(`createTools:${name}:session`, HIDDEN_TOOLS[name], toolSession);
+				if (goalStateTool) {
+					toolRegistry.set(goalStateTool.name, wrapToolWithMetaNotice(goalStateTool));
+				}
+			}
+		}
 		if (!toolRegistry.has("goal") && settings.get("goal.enabled")) {
 			const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 			if (goalTool) {
@@ -1459,6 +1469,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: toolRegistry,
 			getToolContext: () => toolContextStore.getContext(),
 			emitEvent: event => cursorEventEmitter?.(event),
+			createEventEmitter: () => agent.createExternalEventEmitterForCurrentRun(),
 		});
 
 		const repeatToolDescriptions = settings.get("repeatToolDescriptions");

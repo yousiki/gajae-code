@@ -3,6 +3,7 @@ import { Settings } from "../src/config/settings";
 import type { AgentSession } from "../src/session/agent-session";
 import type { SessionManager } from "../src/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
+import * as sshConfig from "../src/ssh/config-writer";
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -161,16 +162,6 @@ describe("ACP builtin slash commands", () => {
 		expect(output).toEqual(["Fast mode is off."]);
 	});
 
-	it("forces a tool and returns remaining prompt text", async () => {
-		const { output, runtime } = createRuntime();
-
-		const result = await executeAcpBuiltinSlashCommand("/force read inspect package.json", runtime);
-
-		expect(result).toEqual({ prompt: "inspect package.json" });
-		expect(runtime.session.forcedToolChoice).toBe("read");
-		expect(output).toEqual(["Next turn forced to use read."]);
-	});
-
 	it("renders provider usage reports when the session can fetch them", async () => {
 		const { output, runtime } = createRuntime();
 		runtime.session.fetchUsageReports = async () => [
@@ -316,27 +307,34 @@ describe("ACP builtin slash commands", () => {
 		expect(configNotified).toBe(0);
 	});
 
-	// Removed TUI-only and dropped commands fall through as false
-	it("removed commands return false (fall through to model)", async () => {
-		const removedCommands = [
+	// TUI-only and dropped commands fall through as false
+	it("TUI-only and dropped commands return false (fall through to model)", async () => {
+		const fallthroughCommands = [
 			"/login",
 			"/logout",
 			"/resume",
 			"/tree",
 			"/branch",
+			"/browser",
+			"/changelog",
+			"/context",
 			"/plan",
 			"/loop",
+			"/share",
 			"/hotkeys",
 			"/extensions",
 			"/agents",
 			"/copy",
+			"/todo",
+			"/force read file.ts",
+			"/quit",
 			"/btw hi",
 			"/new",
 			"/drop",
 			"/handoff",
 			"/fork",
 		];
-		for (const cmd of removedCommands) {
+		for (const cmd of fallthroughCommands) {
 			const { runtime } = createRuntime();
 			const result = await executeAcpBuiltinSlashCommand(cmd, runtime);
 			expect(result).toBe(false);
@@ -436,39 +434,6 @@ describe("wave 3 commands", () => {
 		expect(output[0]).toContain("Failed to export session: disk full");
 	});
 
-	// /todo
-	it("/todo no-args: outputs empty state message when no todos", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/todo", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toBe("No todos. Use /todo append <task> to start one.");
-	});
-
-	it("/todo append: stores phases and records custom entry", async () => {
-		const { session, fakeSessionManager, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand('/todo append "Build" "Wire setup"', runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(session._todoPhases).toHaveLength(1);
-		expect(session._todoPhases[0]?.name).toBe("Build");
-		expect(session._todoPhases[0]?.tasks[0]?.content).toBe("Wire setup");
-		expect(fakeSessionManager._customEntries).toHaveLength(1);
-		expect(fakeSessionManager._customEntries[0]?.customType).toBe("user_todo_edit");
-	});
-
-	it("/todo edit: returns TUI-only usage message", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/todo edit", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("TUI editor");
-	});
-
-	it("/todo unknown: returns usage message", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/todo foobar", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Unknown /todo subcommand");
-	});
-
 	// /move
 	it("/move: returns usage when no arg", async () => {
 		const { output, runtime } = createRuntime();
@@ -506,40 +471,6 @@ describe("wave 3 commands", () => {
 		expect(output.length).toBeGreaterThan(0);
 	});
 
-	// /todo start fuzzy match
-	it("/todo start: finds pending task by substring and starts it", async () => {
-		const { output, session, runtime } = createRuntime();
-		session._todoPhases = [{ name: "Setup", tasks: [{ content: "Wire up router", status: "pending" }] }];
-		const result = await executeAcpBuiltinSlashCommand('/todo start "wire"', runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Wire up router");
-		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("in_progress");
-	});
-
-	// /browser
-	it("/browser visible: sets headless=false; second call is idempotent", async () => {
-		const { runtime } = createRuntime();
-		runtime.settings.set("browser.enabled" as never, true as never);
-		runtime.settings.set("browser.headless" as never, true as never);
-		const r1 = await executeAcpBuiltinSlashCommand("/browser visible", runtime);
-		expect(r1).toEqual({ consumed: true });
-		expect(runtime.settings.get("browser.headless" as never)).toBe(false);
-		const r2 = await executeAcpBuiltinSlashCommand("/browser visible", runtime);
-		expect(r2).toEqual({ consumed: true });
-		expect(runtime.settings.get("browser.headless" as never)).toBe(false);
-	});
-
-	it("/browser no-arg after /browser visible toggles to headless", async () => {
-		const { output, runtime } = createRuntime();
-		runtime.settings.set("browser.enabled" as never, true as never);
-		runtime.settings.set("browser.headless" as never, true as never);
-		await executeAcpBuiltinSlashCommand("/browser visible", runtime);
-		const r = await executeAcpBuiltinSlashCommand("/browser", runtime);
-		expect(r).toEqual({ consumed: true });
-		expect(output[output.length - 1]).toContain("headless");
-		expect(runtime.settings.get("browser.headless" as never)).toBe(true);
-	});
-
 	// /compact
 	it("/compact: reports Compaction complete. after session.compact resolves", async () => {
 		const { output, session, runtime } = createRuntime();
@@ -573,8 +504,7 @@ describe("wave 4 commands", () => {
 		}
 	});
 
-	// /ssh
-	it("/ssh (no args): outputs help text containing list and remove", async () => {
+	it("/ssh commands remain preserved in ACP", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/ssh", runtime);
 		expect(result).toEqual({ consumed: true });
@@ -582,99 +512,14 @@ describe("wave 4 commands", () => {
 		expect(output[0]).toContain("remove");
 	});
 
-	it("/ssh help: outputs help text containing list and remove", async () => {
+	it("removed plugin and marketplace commands fall through", async () => {
 		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/ssh help", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("list");
-		expect(output[0]).toContain("remove");
-	});
 
-	it("/ssh add (no args): returns usage", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/ssh add", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Usage");
-	});
-
-	it("/ssh unknown-verb: returns unknown subcommand message", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/ssh frobnicate", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Unknown");
-	});
-
-	// /marketplace
-	it("/marketplace help: outputs help text", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/marketplace help", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Marketplace commands");
-		expect(output[0]).toContain("install");
-	});
-
-	it("/marketplace install (no args): returns interactive picker usage", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/marketplace install", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("TUI-only");
-	});
-
-	it("/marketplace uninstall (no args): returns interactive picker usage", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/marketplace uninstall", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("TUI-only");
-	});
-
-	// /plugins
-	it("/plugins list: outputs without throwing when registries are empty", async () => {
-		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
-		const { PluginManager } = await import("../src/extensibility/plugins");
-		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
-		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
-		try {
-			const { output, runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand("/plugins list", runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(output.length).toBeGreaterThan(0);
-		} finally {
-			listInstalledSpy.mockRestore();
-			npmListSpy.mockRestore();
+		for (const command of ["/marketplace help", "/marketplace install", "/plugins list", "/reload-plugins"]) {
+			const result = await executeAcpBuiltinSlashCommand(command, runtime);
+			expect(result).toBe(false);
 		}
-	});
-
-	it("/plugins (no args): defaults to list", async () => {
-		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
-		const { PluginManager } = await import("../src/extensibility/plugins");
-		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
-		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
-		try {
-			const { output, runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand("/plugins", runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(output.length).toBeGreaterThan(0);
-		} finally {
-			listInstalledSpy.mockRestore();
-			npmListSpy.mockRestore();
-		}
-	});
-
-	// /todo start with in_progress status in fuzzy list
-	it("/todo start: resolves ambiguous matches by preferring active tasks", async () => {
-		const { output, session, runtime } = createRuntime();
-		session._todoPhases = [
-			{
-				name: "Phase 1",
-				tasks: [
-					{ content: "Wire auth middleware", status: "pending" },
-					{ content: "Wire session store", status: "completed" },
-				],
-			},
-		];
-		const result = await executeAcpBuiltinSlashCommand('/todo start "wire"', runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Wire auth middleware");
+		expect(output).toEqual([]);
 	});
 });
 
@@ -705,17 +550,13 @@ describe("wave 5 — adapters and polish", () => {
 		expect(output).toEqual([]);
 	});
 
-	// /ssh add — spy on addSSHHost
-	it("/ssh add foo --host x --user y --scope user: calls addSSHHost", async () => {
-		const sshModule = await import("../src/ssh/config-writer");
-		const spy = spyOn(sshModule, "addSSHHost").mockResolvedValue(undefined);
+	it("/ssh add remains preserved and calls addSSHHost", async () => {
+		const spy = spyOn(sshConfig, "addSSHHost").mockResolvedValue(undefined);
 		try {
 			const { output, runtime } = createRuntime();
 			const result = await executeAcpBuiltinSlashCommand("/ssh add foo --host x --user y --scope user", runtime);
 			expect(result).toEqual({ consumed: true });
 			expect(output[0]).toContain('Added SSH host "foo" (user).');
-			// Without this assertion, the command could succeed via a side-effect-free
-			// path that prints the success message without writing the host config.
 			expect(spy).toHaveBeenCalledTimes(1);
 			const [configPath, name, hostConfig] = spy.mock.calls[0]!;
 			expect(typeof configPath).toBe("string");
@@ -773,31 +614,6 @@ describe("wave 5 — adapters and polish", () => {
 	});
 
 	// /context breakdown
-	it("/context: lists more than one breakdown line for session with messages", async () => {
-		const { output, session, runtime } = createRuntime();
-		// computeContextBreakdown needs model.contextWindow; fake session falls back gracefully
-		(session as unknown as Record<string, unknown>).model = {
-			provider: "anthropic",
-			id: "claude-test",
-			contextWindow: 200_000,
-		};
-		(session as unknown as Record<string, unknown>).skills = [];
-		(session as unknown as Record<string, unknown>).agent = { state: { tools: [] } };
-		(session as unknown as Record<string, unknown>).systemPrompt = ["You are a helpful assistant."];
-		(session as unknown as Record<string, unknown>).settings = {
-			getGroup: () => ({ enabled: false, strategy: "off" }),
-		};
-		session.messages = [
-			{ role: "user", content: "Hello, how are you?" },
-			{ role: "assistant", content: "I am doing well." },
-		];
-		const result = await executeAcpBuiltinSlashCommand("/context", runtime);
-		expect(result).toEqual({ consumed: true });
-		// Should show the breakdown with multiple lines (Messages category visible)
-		const text = output[0] ?? "";
-		expect(text).toContain("tokens");
-		expect(text.split("\n").length).toBeGreaterThan(1);
-	});
 
 	// /jobs empty state
 	it("/jobs: empty-state output mentions background jobs definition", async () => {
@@ -813,21 +629,10 @@ describe("wave 5 — adapters and polish", () => {
 		expect(output[0]).toContain("background jobs");
 	});
 
-	// /marketplace discover bulleted list
-	it("/marketplace discover: output is bulleted with '  - ' token", async () => {
-		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
-		const discoverSpy = spyOn(MarketplaceManager.prototype, "listAvailablePlugins").mockResolvedValue([
-			{ name: "hello", version: "1.0.0", description: "A greeting plugin" } as never,
-			{ name: "world", version: "2.0.0", description: undefined } as never,
-		]);
-		try {
-			const { output, runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand("/marketplace discover", runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(output[0]).toContain("  - ");
-			expect(output[0]).toContain("hello@1.0.0");
-		} finally {
-			discoverSpy.mockRestore();
-		}
+	it("/marketplace discover falls through after marketplace slash deletion", async () => {
+		const { output, runtime } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand("/marketplace discover", runtime);
+		expect(result).toBe(false);
+		expect(output).toEqual([]);
 	});
 });

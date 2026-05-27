@@ -21,12 +21,18 @@ interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
 
+const INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS = 5_000;
+
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
+
+	#abortInteractive(): Promise<void> {
+		return this.ctx.session.abort({ timeoutMs: INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS });
+	}
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
@@ -48,7 +54,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					void this.ctx.session.abort();
+					void this.#abortInteractive();
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -75,7 +81,7 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				void this.ctx.session.abort();
+				void this.#abortInteractive();
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
@@ -193,7 +199,7 @@ export class InputController {
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
 				// Abort current stream and let queued messages be processed
-				await this.ctx.session.abort();
+				await this.#abortInteractive();
 				return;
 			}
 
@@ -522,7 +528,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort();
+				void this.#abortInteractive();
 			}
 			return 0;
 		}
@@ -532,7 +538,7 @@ export class InputController {
 		this.ctx.editor.setText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort();
+			void this.#abortInteractive();
 		}
 		return allQueued.length;
 	}

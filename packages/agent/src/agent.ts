@@ -286,6 +286,8 @@ export class Agent {
 	#cursorOnToolResult?: CursorToolResultHandler;
 	#runningPrompt?: Promise<void>;
 	#resolveRunningPrompt?: () => void;
+	#runSequence = 0;
+	#activeRunId?: number;
 	#kimiApiFormat?: "openai" | "anthropic";
 	#preferWebsockets?: boolean;
 	#transformToolCallArguments?: (args: Record<string, unknown>, toolName: string) => Record<string, unknown>;
@@ -607,6 +609,119 @@ export class Agent {
 		this.#emit(event);
 	}
 
+	createExternalEventEmitterForCurrentRun(): ((event: AgentEvent) => void) | undefined {
+		const runId = this.#activeRunId;
+		if (runId === undefined) return undefined;
+		return (event: AgentEvent) => {
+			if (this.#activeRunId !== runId) return;
+			this.emitExternalEvent(event);
+		};
+	}
+
+	#assertActiveRun(runId: number): void {
+		if (this.#activeRunId !== runId) {
+			throw new Error("Ignoring Cursor exec callback from an inactive agent run.");
+		}
+	}
+
+	#cursorExecHandlersForRun(runId: number): CursorExecHandlers | undefined {
+		const source = this.#cursorExecHandlers;
+		if (!source) return undefined;
+
+		const guarded: CursorExecHandlers = {};
+		const read = source.read;
+		if (read) {
+			guarded.read = async args => {
+				this.#assertActiveRun(runId);
+				const result = await read(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const ls = source.ls;
+		if (ls) {
+			guarded.ls = async args => {
+				this.#assertActiveRun(runId);
+				const result = await ls(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const grep = source.grep;
+		if (grep) {
+			guarded.grep = async args => {
+				this.#assertActiveRun(runId);
+				const result = await grep(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const write = source.write;
+		if (write) {
+			guarded.write = async args => {
+				this.#assertActiveRun(runId);
+				const result = await write(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const deleteHandler = source.delete;
+		if (deleteHandler) {
+			guarded.delete = async args => {
+				this.#assertActiveRun(runId);
+				const result = await deleteHandler(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const shell = source.shell;
+		if (shell) {
+			guarded.shell = async args => {
+				this.#assertActiveRun(runId);
+				const result = await shell(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const shellStream = source.shellStream;
+		if (shellStream) {
+			guarded.shellStream = async (args, callbacks) => {
+				this.#assertActiveRun(runId);
+				const result = await shellStream(args, callbacks);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const diagnostics = source.diagnostics;
+		if (diagnostics) {
+			guarded.diagnostics = async args => {
+				this.#assertActiveRun(runId);
+				const result = await diagnostics(args);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const mcp = source.mcp;
+		if (mcp) {
+			guarded.mcp = async call => {
+				this.#assertActiveRun(runId);
+				const result = await mcp(call);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		const onToolResult = source.onToolResult;
+		if (onToolResult) {
+			guarded.onToolResult = async message => {
+				this.#assertActiveRun(runId);
+				const result = await onToolResult(message);
+				this.#assertActiveRun(runId);
+				return result;
+			};
+		}
+		return guarded;
+	}
+
 	// State mutators
 	setSystemPrompt(v: string[]) {
 		this.#state.systemPrompt = v;
@@ -753,6 +868,32 @@ export class Agent {
 		this.#abortController?.abort();
 	}
 
+	/**
+	 * Force the current run out of the busy/streaming state when cooperative abort
+	 * did not drain. The abandoned provider/tool stream may still settle later, so
+	 * #runLoop guards every state mutation with a run id.
+	 */
+	forceAbort(reason = "Force aborted"): boolean {
+		const hadActiveRun = this.#runningPrompt !== undefined || this.#state.isStreaming;
+		if (!hadActiveRun) return false;
+
+		this.#abortController?.abort(reason);
+		this.#activeRunId = undefined;
+		this.#state.isStreaming = false;
+		this.#state.streamMessage = null;
+		this.#state.pendingToolCalls = new Set<string>();
+		this.#abortController = undefined;
+		this.#cursorToolResultBuffer = [];
+
+		const resolve = this.#resolveRunningPrompt;
+		this.#runningPrompt = undefined;
+		this.#resolveRunningPrompt = undefined;
+		resolve?.();
+
+		this.#emit({ type: "agent_end", messages: [] });
+		return true;
+	}
+
 	waitForIdle(): Promise<void> {
 		return this.#runningPrompt ?? Promise.resolve();
 	}
@@ -862,7 +1003,10 @@ export class Agent {
 		this.#runningPrompt = promise;
 		this.#resolveRunningPrompt = resolve;
 
-		this.#abortController = new AbortController();
+		const runId = ++this.#runSequence;
+		this.#activeRunId = runId;
+		const abortController = new AbortController();
+		this.#abortController = abortController;
 		this.#state.isStreaming = true;
 		this.#state.streamMessage = null;
 		this.#state.error = undefined;
@@ -882,9 +1026,15 @@ export class Agent {
 			this.#cursorExecHandlers || this.#cursorOnToolResult
 				? async (message: ToolResultMessage) => {
 						let finalMessage = message;
+						if (this.#activeRunId !== runId) {
+							return finalMessage;
+						}
 						if (this.#cursorOnToolResult) {
 							try {
 								const updated = await this.#cursorOnToolResult(message);
+								if (this.#activeRunId !== runId) {
+									return finalMessage;
+								}
 								if (updated) {
 									finalMessage = updated;
 								}
@@ -902,6 +1052,7 @@ export class Agent {
 
 		const getToolChoice = () =>
 			this.#getToolChoice?.() ?? refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
+		const cursorExecHandlers = this.#cursorExecHandlersForRun(runId);
 
 		const config: AgentLoopConfig = {
 			model,
@@ -928,6 +1079,7 @@ export class Agent {
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
+			signal: abortController.signal,
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
 			syncContextBeforeModelCall: async context => {
@@ -937,26 +1089,66 @@ export class Agent {
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;
 			},
-			cursorExecHandlers: this.#cursorExecHandlers,
+			cursorExecHandlers,
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
 			appendOnlyContext: this.#appendOnlyContext,
-			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
-			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
-			onAssistantMessageEvent: this.#onAssistantMessageEvent,
+			beforeToolCall: this.beforeToolCall
+				? async (ctx, signal) => {
+						if (this.#activeRunId !== runId) return undefined;
+						const result = await this.beforeToolCall?.(ctx, signal);
+						if (this.#activeRunId !== runId) return undefined;
+						return result;
+					}
+				: undefined,
+			afterToolCall: this.afterToolCall
+				? async (ctx, signal) => {
+						if (this.#activeRunId !== runId) return undefined;
+						const result = await this.afterToolCall?.(ctx, signal);
+						if (this.#activeRunId !== runId) return undefined;
+						return result;
+					}
+				: undefined,
+			onAssistantMessageEvent: this.#onAssistantMessageEvent
+				? (message, event) => {
+						if (this.#activeRunId !== runId) return;
+						this.#onAssistantMessageEvent?.(message, event);
+					}
+				: undefined,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
 			getSteeringMessages: async () => {
+				if (this.#activeRunId !== runId) {
+					return [];
+				}
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.#dequeueSteeringMessages();
+				const queued = this.#dequeueSteeringMessages();
+				if (this.#activeRunId !== runId) {
+					this.#steeringQueue = [...queued, ...this.#steeringQueue];
+					return [];
+				}
+				return queued;
 			},
-			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
-			onBeforeYield: () => this.#onBeforeYield?.(),
+			getFollowUpMessages: async () => {
+				if (this.#activeRunId !== runId) {
+					return [];
+				}
+				const queued = this.#dequeueFollowUpMessages();
+				if (this.#activeRunId !== runId) {
+					this.#followUpQueue = [...queued, ...this.#followUpQueue];
+					return [];
+				}
+				return queued;
+			},
+			onBeforeYield: async () => {
+				if (this.#activeRunId !== runId) return;
+				await this.#onBeforeYield?.();
+			},
 			telemetry: this.#telemetry,
 		};
 
@@ -964,10 +1156,14 @@ export class Agent {
 
 		try {
 			const stream = messages
-				? agentLoop(messages, context, config, this.#abortController.signal, this.streamFn)
-				: agentLoopContinue(context, config, this.#abortController.signal, this.streamFn);
+				? agentLoop(messages, context, config, abortController.signal, this.streamFn)
+				: agentLoopContinue(context, config, abortController.signal, this.streamFn);
 
 			for await (const event of stream) {
+				if (this.#activeRunId !== runId) {
+					break;
+				}
+
 				// Update internal state based on events
 				switch (event.type) {
 					case "message_start":
@@ -1022,6 +1218,10 @@ export class Agent {
 				this.#emit(event);
 			}
 
+			if (this.#activeRunId !== runId) {
+				return;
+			}
+
 			// Handle any remaining partial message
 			if (partial && partial.role === "assistant" && Array.isArray(partial.content) && partial.content.length > 0) {
 				const onlyEmpty = !partial.content.some(
@@ -1033,12 +1233,16 @@ export class Agent {
 				if (!onlyEmpty) {
 					this.appendMessage(partial);
 				} else {
-					if (this.#abortController?.signal.aborted) {
+					if (abortController.signal.aborted) {
 						throw new Error("Request was aborted");
 					}
 				}
 			}
 		} catch (err: any) {
+			if (this.#activeRunId !== runId) {
+				return;
+			}
+
 			const errorMsg: AgentMessage = {
 				role: "assistant",
 				content: [{ type: "text", text: "" }],
@@ -1053,7 +1257,7 @@ export class Agent {
 					totalTokens: 0,
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				},
-				stopReason: this.#abortController?.signal.aborted ? "aborted" : "error",
+				stopReason: abortController.signal.aborted ? "aborted" : "error",
 				errorMessage: err?.message || String(err),
 				timestamp: Date.now(),
 			} as AgentMessage;
@@ -1062,13 +1266,16 @@ export class Agent {
 			this.#state.error = err?.message || String(err);
 			this.#emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
-			this.#state.isStreaming = false;
-			this.#state.streamMessage = null;
-			this.#state.pendingToolCalls = new Set<string>();
-			this.#abortController = undefined;
-			this.#resolveRunningPrompt?.();
-			this.#runningPrompt = undefined;
-			this.#resolveRunningPrompt = undefined;
+			if (this.#activeRunId === runId) {
+				this.#state.isStreaming = false;
+				this.#state.streamMessage = null;
+				this.#state.pendingToolCalls = new Set<string>();
+				this.#abortController = undefined;
+				this.#activeRunId = undefined;
+				this.#resolveRunningPrompt?.();
+				this.#runningPrompt = undefined;
+				this.#resolveRunningPrompt = undefined;
+			}
 		}
 	}
 

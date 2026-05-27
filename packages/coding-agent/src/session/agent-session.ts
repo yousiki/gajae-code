@@ -1097,8 +1097,9 @@ export class AgentSession {
 				message,
 				assistantMessageEvent,
 			};
+			const generation = this.#promptGeneration;
 			this.#preCacheStreamingEditFile(event);
-			this.#maybeAbortStreamingEdit(event);
+			this.#maybeAbortStreamingEdit(event, generation);
 		});
 		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
 		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
@@ -1614,7 +1615,7 @@ export class AgentSession {
 			event.type === "message_update" &&
 			(event.assistantMessageEvent.type === "toolcall_end" || event.assistantMessageEvent.type === "toolcall_delta")
 		) {
-			this.#maybeAbortStreamingEdit(event);
+			this.#maybeAbortStreamingEdit(event, this.#promptGeneration);
 		}
 
 		// Handle session persistence
@@ -1969,6 +1970,15 @@ export class AgentSession {
 			this.#resolvePostPromptTasks();
 		}
 	}
+
+	#abandonPostPromptTasks(): void {
+		this.#postPromptTasksAbortController.abort();
+		this.#postPromptTasksAbortController = new AbortController();
+		this.#postPromptTasks.clear();
+		this.#resolveTtsrResume();
+		this.#resolvePostPromptTasks();
+	}
+
 	/**
 	 * Wait for retry, TTSR resume, and any background continuation to settle.
 	 * Loops because a TTSR continuation can trigger a retry (or vice-versa),
@@ -2437,7 +2447,7 @@ export class AgentSession {
 		};
 	}
 
-	#maybeAbortStreamingEdit(event: AgentEvent): void {
+	#maybeAbortStreamingEdit(event: AgentEvent, generation: number): void {
 		if (!this.settings.get("edit.streamingAbort")) return;
 		if (this.#streamingEditAbortTriggered) return;
 		if (event.type !== "message_update") return;
@@ -2495,15 +2505,16 @@ export class AgentSession {
 				return;
 			}
 			if (assistantEvent.type === "toolcall_delta") return;
-			void this.#checkRemovedLinesAsync(toolCall.id, path, resolvedPath, removedLines);
+			void this.#checkRemovedLinesAsync(generation, toolCall.id, path, resolvedPath, removedLines);
 			return;
 		}
 
 		if (assistantEvent.type === "toolcall_delta") return;
-		void this.#checkPreviewPatchAsync(toolCall.id, path, rename, normalizedDiff);
+		void this.#checkPreviewPatchAsync(generation, toolCall.id, path, rename, normalizedDiff);
 	}
 
 	async #checkRemovedLinesAsync(
+		generation: number,
 		toolCallId: string,
 		path: string,
 		resolvedPath: string,
@@ -2512,6 +2523,7 @@ export class AgentSession {
 		if (this.#streamingEditAbortTriggered) return;
 		try {
 			const { text } = stripBom(await Bun.file(resolvedPath).text());
+			if (this.#promptGeneration !== generation) return;
 			const normalizedContent = normalizeToLF(text);
 			const missing = removedLines.find(line => !normalizedContent.includes(normalizeToLF(line)));
 			if (missing) {
@@ -2533,6 +2545,7 @@ export class AgentSession {
 	}
 
 	async #checkPreviewPatchAsync(
+		generation: number,
 		toolCallId: string,
 		path: string,
 		rename: string | undefined,
@@ -2549,6 +2562,7 @@ export class AgentSession {
 				},
 			);
 		} catch (error) {
+			if (this.#promptGeneration !== generation) return;
 			if (error instanceof ParseError) return;
 			this.#streamingEditAbortTriggered = true;
 			logger.warn("Streaming edit aborted due to patch preview failure", {
@@ -4777,7 +4791,7 @@ export class AgentSession {
 	/**
 	 * Abort current operation and wait for agent to become idle.
 	 */
-	async abort(options?: { goalReason?: "interrupted" | "internal" }): Promise<void> {
+	async abort(options?: { goalReason?: "interrupted" | "internal"; timeoutMs?: number }): Promise<void> {
 		this.abortRetry();
 		this.#promptGeneration++;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -4787,8 +4801,31 @@ export class AgentSession {
 		this.abortEval();
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
-		await postPromptDrain;
-		await this.agent.waitForIdle();
+		const cleanup = Promise.all([postPromptDrain, this.agent.waitForIdle()]).then(
+			() => ({ type: "settled" as const }),
+			(error: unknown) => ({ type: "error" as const, error }),
+		);
+		cleanup.catch(() => {});
+		const timeoutMs = options?.timeoutMs;
+		if (timeoutMs !== undefined && timeoutMs > 0) {
+			const outcome = await Promise.race([cleanup, Bun.sleep(timeoutMs).then(() => ({ type: "timeout" as const }))]);
+			if (outcome.type === "timeout") {
+				this.#abandonPostPromptTasks();
+				this.agent.forceAbort("Abort cleanup timed out");
+				this.emitNotice(
+					"warning",
+					"Abort cleanup timed out; forced session recovery. The previous provider stream or tool may still be unwinding in the background.",
+					"abort",
+				);
+			} else if (outcome.type === "error") {
+				throw outcome.error;
+			}
+		} else {
+			const outcome = await cleanup;
+			if (outcome.type === "error") {
+				throw outcome.error;
+			}
+		}
 		await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 		// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 		// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,

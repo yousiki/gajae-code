@@ -19,7 +19,7 @@ function normalizeRenderedText(text: string): string {
 
 interface SelectionCapture {
 	model: Model;
-	role: string | null;
+	role: "default" | null;
 	thinkingLevel: unknown;
 	selector: string | undefined;
 }
@@ -29,7 +29,7 @@ function createSelector(
 	settings: Settings,
 	onSelect: (
 		model: Model,
-		role: string | null,
+		role: "default" | null,
 		thinkingLevel: unknown,
 		selector: string | undefined,
 	) => void = () => {},
@@ -86,7 +86,7 @@ describe("ModelSelector canonical model selection", () => {
 		}
 	});
 
-	test("shows existing role badges but selects a single canonical default model without role menu", async () => {
+	test("uses canonical default-only model assignment even when legacy roles are configured", async () => {
 		installTestTheme();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
@@ -94,8 +94,8 @@ describe("ModelSelector canonical model selection", () => {
 		const settings = Settings.isolated({
 			cycleOrder: ["smol", "custom-fast", "default"],
 			modelRoles: {
-				default: `${model.provider}/${model.id}`,
-				"custom-fast": `${model.provider}/${model.id}:low`,
+				default: `${model.provider}/${model.id}:low`,
+				"custom-fast": `${model.provider}/${model.id}:high`,
 				smol: `${model.provider}/${model.id}`,
 			},
 			modelTags: {
@@ -111,8 +111,9 @@ describe("ModelSelector canonical model selection", () => {
 		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(rendered).toContain("custom-fast (low)");
-		expect(rendered).toContain("SMOL (inherit)");
+		expect(rendered).toContain("DEFAULT (low)");
+		expect(rendered).not.toContain("custom-fast");
+		expect(rendered).not.toContain("SMOL");
 
 		selector.handleInput("\n");
 		installTestTheme();
@@ -124,6 +125,7 @@ describe("ModelSelector canonical model selection", () => {
 
 		const afterEnterRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(afterEnterRendered).not.toContain("Action for:");
+		expect(afterEnterRendered).not.toContain("Set as DEFAULT");
 		expect(afterEnterRendered).not.toContain("Set as custom-fast");
 		expect(afterEnterRendered).not.toContain("Set as SMOL");
 	});

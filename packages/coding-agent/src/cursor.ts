@@ -21,6 +21,7 @@ interface CursorExecBridgeOptions {
 	tools: Map<string, AgentTool>;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
+	createEventEmitter?: () => ((event: AgentEvent) => void) | undefined;
 }
 
 function createToolResultMessage(
@@ -162,23 +163,30 @@ function formatMcpToolErrorMessage(toolName: string, availableTools: string[]): 
 export class CursorExecHandlers implements ICursorExecHandlers {
 	constructor(private options: CursorExecBridgeOptions) {}
 
+	#optionsForCall(): CursorExecBridgeOptions {
+		return {
+			...this.options,
+			emitEvent: this.options.createEventEmitter ? this.options.createEventEmitter() : this.options.emitEvent,
+		};
+	}
+
 	async read(args: Parameters<NonNullable<ICursorExecHandlers["read"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "read", toolCallId, { path: args.path });
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "read", toolCallId, { path: args.path });
 		return toolResultMessage;
 	}
 
 	async ls(args: Parameters<NonNullable<ICursorExecHandlers["ls"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		// Redirect ls to read tool, which handles directories
-		const toolResultMessage = await executeTool(this.options, "read", toolCallId, { path: args.path });
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "read", toolCallId, { path: args.path });
 		return toolResultMessage;
 	}
 
 	async grep(args: Parameters<NonNullable<ICursorExecHandlers["grep"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		const searchPath = args.glob ? `${args.path || "."}/${args.glob}` : args.path || ".";
-		const toolResultMessage = await executeTool(this.options, "search", toolCallId, {
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "search", toolCallId, {
 			pattern: args.pattern,
 			paths: [searchPath],
 			i: args.caseInsensitive || undefined,
@@ -189,7 +197,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	async write(args: Parameters<NonNullable<ICursorExecHandlers["write"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		const content = args.fileText ?? new TextDecoder().decode(args.fileBytes ?? new Uint8Array());
-		const toolResultMessage = await executeTool(this.options, "write", toolCallId, {
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "write", toolCallId, {
 			path: args.path,
 			content,
 		});
@@ -198,14 +206,14 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async delete(args: Parameters<NonNullable<ICursorExecHandlers["delete"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeDelete(this.options, args.path, toolCallId);
+		const toolResultMessage = await executeDelete(this.#optionsForCall(), args.path, toolCallId);
 		return toolResultMessage;
 	}
 
 	async shell(args: Parameters<NonNullable<ICursorExecHandlers["shell"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		const timeoutSeconds = args.timeout && args.timeout > 0 ? args.timeout : undefined;
-		const toolResultMessage = await executeTool(this.options, "bash", toolCallId, {
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "bash", toolCallId, {
 			command: args.command,
 			cwd: args.workingDirectory || undefined,
 			timeout: timeoutSeconds,
@@ -217,9 +225,10 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		args: Parameters<NonNullable<ICursorExecHandlers["shellStream"]>>[0],
 		callbacks: CursorShellStreamCallbacks,
 	) {
+		const options = this.#optionsForCall();
 		const toolCallId = decodeToolCallId(args.toolCallId);
 		const toolName = "bash";
-		const tool = this.options.tools.get(toolName);
+		const tool = options.tools.get(toolName);
 		if (!tool) {
 			const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 			return createToolResultMessage(toolCallId, toolName, result, true);
@@ -232,7 +241,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			timeout: timeoutSeconds,
 		};
 
-		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });
+		options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });
 
 		let result: AgentToolResult<unknown>;
 		let isError = false;
@@ -252,7 +261,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 				content: [{ type: "text" as const, text: sanitizedRawText }],
 				details: partialResult.details,
 			};
-			this.options.emitEvent?.({
+			options.emitEvent?.({
 				type: "tool_execution_update",
 				toolCallId,
 				toolName,
@@ -277,7 +286,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		};
 
 		try {
-			result = await tool.execute(toolCallId, toolArgs, undefined, onUpdate, this.options.getToolContext?.());
+			result = await tool.execute(toolCallId, toolArgs, undefined, onUpdate, options.getToolContext?.());
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			result = buildToolErrorResult(message);
@@ -303,7 +312,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
 			details: result.details,
 		};
-		this.options.emitEvent?.({
+		options.emitEvent?.({
 			type: "tool_execution_end",
 			toolCallId,
 			toolName,
@@ -315,7 +324,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async diagnostics(args: Parameters<NonNullable<ICursorExecHandlers["diagnostics"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "lsp", toolCallId, {
+		const toolResultMessage = await executeTool(this.#optionsForCall(), "lsp", toolCallId, {
 			action: "diagnostics",
 			file: args.path,
 		});
@@ -323,18 +332,19 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	}
 
 	async mcp(call: CursorMcpCall) {
+		const options = this.#optionsForCall();
 		const toolName = call.toolName || call.name;
 		const toolCallId = decodeToolCallId(call.toolCallId);
-		const tool = this.options.tools.get(toolName);
+		const tool = options.tools.get(toolName);
 		if (!tool) {
-			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
+			const availableTools = Array.from(options.tools.keys()).filter(name => name.startsWith("mcp__"));
 			const message = formatMcpToolErrorMessage(toolName, availableTools);
 			const result = buildToolErrorResult(message);
 			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
 		const args = Object.keys(call.args ?? {}).length > 0 ? call.args : decodeMcpArgs(call.rawArgs ?? {});
-		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
+		const toolResultMessage = await executeTool(options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}
 }
