@@ -2,6 +2,11 @@ import { THINKING_EFFORTS } from "@gajae-code/ai";
 import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 import { getThinkingLevelMetadata } from "../thinking";
 import { EDIT_MODES } from "../utils/edit-mode";
+import {
+	DEFAULT_DISABLED_EXTENSIONS,
+	DEFAULT_SKILL_DISCOVERY_SETTINGS,
+	type SkillDiscoverySettings,
+} from "./skill-settings-defaults";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -12,7 +17,7 @@ import { EDIT_MODES } from "../utils/edit-mode";
  *
  * The Settings singleton provides type-safe path-based access:
  *   settings.get("compaction.enabled")  // => boolean
- *   settings.set("theme.dark", "titanium")  // sync, saves in background
+ *   settings.set("theme.dark", "red-claw")  // sync, saves in background
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -61,7 +66,8 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 
 /** Status line segment identifiers */
 export type StatusLineSegmentId =
-	| "pi"
+	| "gajae"
+	| "pi" // legacy custom alias; public presets use gajae
 	| "model"
 	| "mode"
 	| "path"
@@ -188,7 +194,7 @@ export interface ModelTagsSettings {
 // under `as const` while still letting SettingValue infer the correct element type.
 const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
-const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
+const DEFAULT_CYCLE_ORDER: string[] = ["default"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
@@ -296,24 +302,14 @@ export const SETTINGS_SCHEMA = {
 	"marketplace.autoUpdate": {
 		type: "enum",
 		values: ["off", "notify", "auto"] as const,
-		default: "notify",
-		ui: {
-			tab: "tools",
-			label: "Marketplace Auto-Update",
-			description: "Check for plugin updates on startup (off/notify/auto)",
-			options: [
-				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
-				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
-				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
-			],
-		},
+		default: "off",
 	},
 
 	enabledModels: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	disabledProviders: { type: "array", default: EMPTY_STRING_ARRAY },
 
-	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
+	disabledExtensions: { type: "array", default: DEFAULT_DISABLED_EXTENSIONS },
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
@@ -330,7 +326,7 @@ export const SETTINGS_SCHEMA = {
 	// Theme
 	"theme.dark": {
 		type: "string",
-		default: "titanium",
+		default: "red-claw",
 		ui: {
 			tab: "appearance",
 			label: "Dark Theme",
@@ -400,7 +396,7 @@ export const SETTINGS_SCHEMA = {
 	"statusLine.separator": {
 		type: "enum",
 		values: ["powerline", "powerline-thin", "slash", "pipe", "block", "none", "ascii"] as const,
-		default: "powerline-thin",
+		default: "slash",
 		ui: {
 			tab: "appearance",
 			label: "Status Line Separator",
@@ -529,12 +525,12 @@ export const SETTINGS_SCHEMA = {
 
 	"statusLine.showHookStatus": {
 		type: "boolean",
+		default: false,
+	},
+
+	"statusLine.showSkillHud": {
+		type: "boolean",
 		default: true,
-		ui: {
-			tab: "appearance",
-			label: "Show Hook Status",
-			description: "Display hook status messages below status line",
-		},
 	},
 
 	"statusLine.leftSegments": { type: "array", default: [] as StatusLineSegmentId[] },
@@ -2134,13 +2130,12 @@ export const SETTINGS_SCHEMA = {
 	// Tool Discovery
 	"tools.discoveryMode": {
 		type: "enum",
-		values: ["off", "mcp-only", "all"] as const,
+		values: ["off", "all"] as const,
 		default: "off",
 		ui: {
 			tab: "tools",
 			label: "Tool Discovery",
-			description:
-				"Hide tools behind a search tool to save tokens. 'mcp-only' hides MCP tools; 'all' hides all non-essential built-ins too.",
+			description: "Hide non-essential built-in tools behind a search tool to save tokens.",
 		},
 	},
 
@@ -2158,48 +2153,27 @@ export const SETTINGS_SCHEMA = {
 	// MCP
 	"mcp.enableProjectConfig": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tools", label: "MCP Project Config", description: "Load .mcp.json/mcp.json from project root" },
+		default: false,
 	},
 
 	"mcp.discoveryMode": {
 		type: "boolean",
 		default: false,
-		ui: {
-			tab: "tools",
-			label: "MCP Tool Discovery",
-			description: "Hide MCP tools by default and expose them through a tool discovery tool",
-		},
 	},
 
 	"mcp.discoveryDefaultServers": {
 		type: "array",
 		default: [] as string[],
-		ui: {
-			tab: "tools",
-			label: "MCP Discovery Default Servers",
-			description: "Keep MCP tools from these servers visible while discovery mode hides other MCP tools",
-		},
 	},
 
 	"mcp.notifications": {
 		type: "boolean",
 		default: false,
-		ui: {
-			tab: "tools",
-			label: "MCP Update Injection",
-			description: "Inject MCP resource updates into the agent conversation",
-		},
 	},
 
 	"mcp.notificationDebounceMs": {
 		type: "number",
 		default: 500,
-		ui: {
-			tab: "tools",
-			label: "MCP Notification Debounce",
-			description: "Debounce window for MCP resource update notifications before injecting into conversation",
-		},
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -2459,57 +2433,48 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Skills
-	"skills.enabled": { type: "boolean", default: true },
+	"skills.enabled": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enabled },
 
 	"skills.enableSkillCommands": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Skill Commands", description: "Register skills as /skill:name commands" },
+		default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enableSkillCommands,
 	},
 
-	"skills.enableCodexUser": { type: "boolean", default: true },
+	"skills.enableCodexUser": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enableCodexUser },
 
-	"skills.enableClaudeUser": { type: "boolean", default: true },
+	"skills.enableClaudeUser": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enableClaudeUser },
 
-	"skills.enableClaudeProject": { type: "boolean", default: true },
+	"skills.enableClaudeProject": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enableClaudeProject },
 
-	"skills.enablePiUser": { type: "boolean", default: true },
+	"skills.enablePiUser": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enablePiUser },
 
-	"skills.enablePiProject": { type: "boolean", default: true },
+	"skills.enablePiProject": { type: "boolean", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.enablePiProject },
 
-	"skills.customDirectories": { type: "array", default: [] as string[] },
+	"skills.customDirectories": { type: "array", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.customDirectories },
 
-	"skills.ignoredSkills": { type: "array", default: [] as string[] },
+	"skills.ignoredSkills": { type: "array", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.ignoredSkills },
 
-	"skills.includeSkills": { type: "array", default: [] as string[] },
+	"skills.includeSkills": { type: "array", default: DEFAULT_SKILL_DISCOVERY_SETTINGS.includeSkills },
 
 	// Commands
 	"commands.enableClaudeUser": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Claude User Commands", description: "Load commands from ~/.claude/commands/" },
+		default: false,
 	},
 
 	"commands.enableClaudeProject": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
+		default: false,
 	},
 
 	"commands.enableOpencodeUser": {
 		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tasks",
-			label: "OpenCode User Commands",
-			description: "Load commands from ~/.config/opencode/commands/",
-		},
+		default: false,
 	},
 
 	"commands.enableOpencodeProject": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+		default: false,
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -2738,52 +2703,6 @@ export const SETTINGS_SCHEMA = {
 
 	"commit.changelogMaxDiffChars": { type: "number", default: 120000 },
 
-	"dev.autoqa": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			label: "Auto QA",
-			description: "Enable automated tool issue reporting (report_tool_issue) for all agents",
-		},
-	},
-
-	"dev.autoqaPush.endpoint": {
-		type: "string",
-		// Bundled QA collector — runs `the configured gajae-code Auto QA collector` behind qa.gajae-code.local.
-		// Override via `PI_AUTO_QA_PUSH_URL` or `dev.autoqaPush.endpoint`
-		// in `config.yml` to point at a self-hosted instance.
-		default: "https://qa.gajae-code.local/v1/grievances" as const,
-		ui: {
-			tab: "tools",
-			label: "Auto QA Push Endpoint",
-			description:
-				"Full URL that receives the JSON payload (default ships to https://qa.gajae-code.local/v1/grievances)",
-		},
-	},
-
-	"dev.autoqaPush.token": {
-		type: "string",
-		default: undefined,
-	},
-
-	/**
-	 * User decision on sharing automatic `report_tool_issue` grievances.
-	 *
-	 *   - `"unset"`  — never asked; the first `report_tool_issue` invocation
-	 *                  pops a consent dialog and persists the answer here.
-	 *   - `"granted"` — record and (when push is configured) ship grievances.
-	 *   - `"denied"`  — silently no-op every `report_tool_issue` call.
-	 *
-	 * Owned by `packages/coding-agent/src/tools/report-tool-issue.ts` via the
-	 * process-global consent handler registered by `InteractiveMode`.
-	 */
-	"dev.autoqa.consent": {
-		type: "enum",
-		values: ["unset", "granted", "denied"] as const,
-		default: "unset" as const,
-	},
-
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },
 
 	"thinkingBudgets.low": { type: "number", default: 2048 },
@@ -2927,17 +2846,7 @@ export interface BranchSummarySettings {
 	reserveTokens: number;
 }
 
-export interface SkillsSettings {
-	enabled?: boolean;
-	enableSkillCommands?: boolean;
-	enableCodexUser?: boolean;
-	enableClaudeUser?: boolean;
-	enableClaudeProject?: boolean;
-	enablePiUser?: boolean;
-	enablePiProject?: boolean;
-	customDirectories?: string[];
-	ignoredSkills?: string[];
-	includeSkills?: string[];
+export interface SkillsSettings extends SkillDiscoverySettings {
 	disabledExtensions?: string[];
 }
 
@@ -2969,6 +2878,7 @@ export interface StatusLineSettings {
 	preset: StatusLinePreset;
 	separator: StatusLineSeparatorStyle;
 	showHookStatus: boolean;
+	showSkillHud: boolean;
 	leftSegments: StatusLineSegmentId[];
 	rightSegments: StatusLineSegmentId[];
 	segmentOptions: Record<string, unknown>;

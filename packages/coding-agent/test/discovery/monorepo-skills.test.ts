@@ -31,7 +31,7 @@ describe("monorepo skill discovery", () => {
 
 	beforeEach(() => {
 		clearCache();
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-monorepo-skills-"));
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-monorepo-skills-"));
 		repoRoot = path.join(tempDir, "repo");
 		subProject = path.join(repoRoot, "packages", "my-app");
 		fs.mkdirSync(subProject, { recursive: true });

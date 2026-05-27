@@ -380,15 +380,6 @@ const fn ascii_cell_width_u16(u: u16, tab_width: usize) -> usize {
 
 #[inline]
 fn char_width_corrected(c: char) -> Option<usize> {
-	// Hangul Compatibility Jamo U+3131..=U+318E render as a single cell in
-	// the terminals we ship to (Ghostty, Terminal.app, iTerm2) even though
-	// UAX#11 classifies them as Wide. Mirrors the TS-side correction in
-	// packages/tui/src/utils.ts (visibleWidth). U+318F is reserved and
-	// intentionally excluded.
-	let cp = c as u32;
-	if (0x3131..=0x318e).contains(&cp) {
-		return Some(1);
-	}
 	UnicodeWidthChar::width(c)
 }
 
@@ -404,9 +395,9 @@ fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 	if it.next().is_none() {
 		return char_width_corrected(c0).unwrap_or(0);
 	}
-	// Multi-char grapheme: sum per-char corrected widths so the jamo
-	// override applies even inside combining clusters. Matches what
-	// UnicodeWidthStr would compute, minus the UAX#11 jamo bias.
+	// Multi-char grapheme: sum per-char widths. Conjoining Hangul jamo are
+	// kept in grapheme clusters by unicode-segmentation, and their summed
+	// width matches the NFC syllable width terminals render.
 	g.chars()
 		.map(|c| char_width_corrected(c).unwrap_or(0))
 		.sum()

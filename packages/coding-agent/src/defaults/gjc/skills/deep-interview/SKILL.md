@@ -60,7 +60,7 @@ Inspired by the [Ouroboros project](https://github.com/Q00/ouroboros) which demo
 
 ## Native Plugin Invocation Guard (Issue #3030)
 
-If this raw bundled skill is loaded by GJC's native skill loader through `/gajae-code:deep-interview` or `Skill("gajae-code:deep-interview")`, do not treat that path as permission to skip rendered GJC setup. The user-facing preferred invocation is `/deep-interview`; do not recommend or advertise `/gajae-code:deep-interview` as the deep-interview entrypoint. Regardless of invocation path, Phase 0 below remains blocking and must resolve `gjc.deepInterview.ambiguityThreshold` from settings before any announcement, state write, question, or ambiguity score.
+If this raw bundled skill is loaded by GJC's native skill loader through `/gajae-code:deep-interview` or `Skill("gajae-code:deep-interview")`, do not treat that path as permission to skip rendered GJC setup. The user-facing invocation is `/skill:deep-interview`; do not recommend or advertise `/deep-interview` or `/gajae-code:deep-interview` as the deep-interview entrypoint. Regardless of invocation path, Phase 0 below remains blocking and must resolve `gjc.deepInterview.ambiguityThreshold` from settings before any announcement, state write, question, or ambiguity score.
 
 ## Phase 0: Resolve Ambiguity Threshold (blocking prerequisite)
 
@@ -710,7 +710,7 @@ Optional settings in `.gjc/settings.json`:
 
 ## Resume
 
-If interrupted, run `/deep-interview` again. The skill reads state from `.gjc/state/deep-interview-state.json` and resumes from the last completed round.
+If interrupted, run `/skill:deep-interview` again. The skill reads state from `.gjc/state/deep-interview-state.json` and resumes from the last completed round.
 
 ## Integration with Staged execution
 
@@ -722,18 +722,18 @@ Staged execution: "Your request is quite open-ended. Would you like to run a dee
   [Yes, interview first] [No, expand directly]
 ```
 
-If the user chooses interview, execution invokes `/deep-interview`. When the interview completes and the user selects "Execute with team", the spec becomes Phase 0 output and execution continues from Phase 1 (Planning).
+If the user chooses interview, execution invokes `/skill:deep-interview`. When the interview completes and the user selects "Execute with team", the spec becomes Phase 0 output and execution continues from Phase 1 (Planning).
 
 ## Approval-Gated Pipeline: deep-interview → ralplan → pending approval
 
 The recommended refinement path chains clarity and feasibility gates, then stops for explicit execution approval:
 
 ```
-/deep-interview "vague idea"
+/skill:deep-interview "vague idea"
   → Socratic Q&A until ambiguity ≤ <resolvedThresholdPercent>
   → Spec written to .gjc/specs/deep-interview-{slug}.md
   → User explicitly selects "Refine with ralplan consensus"
-  → /ralplan --consensus --direct (spec as input, skip interview)
+  → /skill:ralplan --consensus --direct (spec as input, skip interview)
     → Planner creates implementation plan from spec
     → Architect reviews for architectural soundness
     → Critic validates quality and testability

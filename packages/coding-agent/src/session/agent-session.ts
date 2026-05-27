@@ -78,7 +78,6 @@ import {
 import { MacOSPowerAssertion } from "@gajae-code/natives";
 import {
 	extractRetryHint,
-	getAgentDbPath,
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
 	logger,
@@ -137,6 +136,7 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { buildGjcRuntimeSessionEnv, consumePendingGoalModeRequest } from "../gjc-runtime/goal-mode-request";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
@@ -165,6 +165,8 @@ import {
 	selectDiscoverableMCPToolNamesByServer,
 } from "../runtime-mcp/discoverable-tool-metadata";
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
+import { formatNoCredentialOnboardingError, formatNoModelOnboardingError } from "../setup/model-onboarding-guidance";
+import { isCanonicalGjcWorkflowSkill, syncSkillActiveState } from "../skill-state/active-state";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import {
@@ -177,7 +179,6 @@ import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
-import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
@@ -197,6 +198,7 @@ import {
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
+	SKILL_PROMPT_MESSAGE_TYPE,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
 import type {
@@ -485,12 +487,12 @@ function dedupeIrcReply(text: string): string {
 
 /**
  * Build the per-request `metadata` payload for the Anthropic provider, shaped
- * like real Claude Code's `getAPIMetadata` output (`{ session_id, account_uuid,
+ * like real Anthropic Code's `getAPIMetadata` output (`{ session_id, account_uuid,
  * device_id }`) so the backend buckets requests under one session and attributes
  * them to the authenticated OAuth account when available. Resolved at request
  * time so token refreshes and login/logout transitions don't strand a stale
  * account UUID in memory. `account_uuid` and `device_id` are omitted for
- * non-Anthropic providers to avoid leaking the user's Claude identity to
+ * non-Anthropic providers to avoid leaking the user's Anthropic model identity to
  * third-party APIs (including Anthropic-format-compatible proxies such as
  * cloudflare-ai-gateway or gitlab-duo).
  *
@@ -512,7 +514,7 @@ function buildSessionMetadata(
 ): Record<string, unknown> {
 	const userId: Record<string, string> = { session_id: sessionId };
 	// Only look up account_uuid when the request is going to Anthropic. Injecting
-	// a Claude OAuth account_uuid into requests bound for other providers (including
+	// a Anthropic model OAuth account_uuid into requests bound for other providers (including
 	// Anthropic-format-compatible proxies like cloudflare-ai-gateway or gitlab-duo)
 	// would leak the user's Anthropic identity to unrelated third-party APIs.
 	if (provider === "anthropic") {
@@ -840,6 +842,7 @@ export class AgentSession {
 	#mcpPromptCommands: LoadedCustomCommand[] = [];
 
 	#skillsSettings: SkillsSettings | undefined;
+	#activeSkillState: { skill: string; sessionId?: string } | undefined;
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
@@ -1094,8 +1097,9 @@ export class AgentSession {
 				message,
 				assistantMessageEvent,
 			};
+			const generation = this.#promptGeneration;
 			this.#preCacheStreamingEditFile(event);
-			this.#maybeAbortStreamingEdit(event);
+			this.#maybeAbortStreamingEdit(event, generation);
 		});
 		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
 		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
@@ -1404,6 +1408,7 @@ export class AgentSession {
 					}
 				}
 			}
+			await this.#syncSkillPromptActiveStateSafely(event.message, true);
 		}
 
 		// Plan-mode → compaction transition: stamp `SILENT_ABORT_MARKER` on the
@@ -1481,6 +1486,9 @@ export class AgentSession {
 				await this.#goalRuntime.onGoalToolCompleted();
 			} else {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
+			}
+			if (event.toolName === "bash" && !event.isError) {
+				await this.#activatePendingGjcGoalModeRequest();
 			}
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
@@ -1607,7 +1615,7 @@ export class AgentSession {
 			event.type === "message_update" &&
 			(event.assistantMessageEvent.type === "toolcall_end" || event.assistantMessageEvent.type === "toolcall_delta")
 		) {
-			this.#maybeAbortStreamingEdit(event);
+			this.#maybeAbortStreamingEdit(event, this.#promptGeneration);
 		}
 
 		// Handle session persistence
@@ -1747,6 +1755,16 @@ export class AgentSession {
 					cacheWrite: usage.cacheWrite,
 				},
 			});
+			if (this.#activeSkillState) {
+				const { skill, sessionId } = this.#activeSkillState;
+				await this.#syncSkillPromptActiveStateSafely(
+					{ customType: SKILL_PROMPT_MESSAGE_TYPE, details: { name: skill } },
+					false,
+				);
+				if (this.#activeSkillState?.skill === skill && this.#activeSkillState.sessionId === sessionId) {
+					this.#activeSkillState = undefined;
+				}
+			}
 			const fallbackAssistant = [...event.messages]
 				.reverse()
 				.find((message): message is AssistantMessage => message.role === "assistant");
@@ -1952,6 +1970,15 @@ export class AgentSession {
 			this.#resolvePostPromptTasks();
 		}
 	}
+
+	#abandonPostPromptTasks(): void {
+		this.#postPromptTasksAbortController.abort();
+		this.#postPromptTasksAbortController = new AbortController();
+		this.#postPromptTasks.clear();
+		this.#resolveTtsrResume();
+		this.#resolvePostPromptTasks();
+	}
+
 	/**
 	 * Wait for retry, TTSR resume, and any background continuation to settle.
 	 * Loops because a TTSR continuation can trigger a retry (or vice-versa),
@@ -2296,8 +2323,7 @@ export class AgentSession {
 
 		// `local://` URLs (e.g. local://PLAN.md for plan-mode) resolve to a real
 		// on-disk artifacts path; pre-caching works as long as we ask the
-		// local-protocol handler. Other internal-scheme URLs (agent://, skill://,
-		// rule://, mcp://, artifact://) have no stable filesystem representation;
+		// local-protocol handler. Other internal-scheme URLs have no stable filesystem representation;
 		// skip pre-cache entirely for those — the edit tool itself will reject
 		// them through its normal dispatch path.
 		const resolvedPath = this.#resolveSessionFsPath(path);
@@ -2399,9 +2425,8 @@ export class AgentSession {
 	 * - `local://` URLs route through the local-protocol handler so they map
 	 *   onto the session's on-disk artifacts directory; pre-caching, ENOENT
 	 *   handling, and post-edit invalidation all work normally.
-	 * - Other internal-scheme URLs (agent://, skill://, rule://, mcp://,
-	 *   artifact://) have no stable filesystem path; this returns `undefined`
-	 *   so callers skip filesystem-only operations.
+	 * - Other internal-scheme URLs have no stable filesystem path; this returns
+	 *   `undefined` so callers skip filesystem-only operations.
 	 * - Cwd-relative and absolute paths resolve via `resolveToCwd`.
 	 */
 	#resolveSessionFsPath(filePath: string): string | undefined {
@@ -2409,13 +2434,7 @@ export class AgentSession {
 		if (normalized.startsWith("local:")) {
 			return resolveLocalUrlToPath(normalized, this.#localProtocolOptions());
 		}
-		if (
-			normalized.startsWith("agent://") ||
-			normalized.startsWith("skill://") ||
-			normalized.startsWith("rule://") ||
-			normalized.startsWith("mcp://") ||
-			normalized.startsWith("artifact://")
-		) {
+		if (normalized.includes("://")) {
 			return undefined;
 		}
 		return resolveToCwd(normalized, this.sessionManager.getCwd());
@@ -2428,7 +2447,7 @@ export class AgentSession {
 		};
 	}
 
-	#maybeAbortStreamingEdit(event: AgentEvent): void {
+	#maybeAbortStreamingEdit(event: AgentEvent, generation: number): void {
 		if (!this.settings.get("edit.streamingAbort")) return;
 		if (this.#streamingEditAbortTriggered) return;
 		if (event.type !== "message_update") return;
@@ -2486,15 +2505,16 @@ export class AgentSession {
 				return;
 			}
 			if (assistantEvent.type === "toolcall_delta") return;
-			void this.#checkRemovedLinesAsync(toolCall.id, path, resolvedPath, removedLines);
+			void this.#checkRemovedLinesAsync(generation, toolCall.id, path, resolvedPath, removedLines);
 			return;
 		}
 
 		if (assistantEvent.type === "toolcall_delta") return;
-		void this.#checkPreviewPatchAsync(toolCall.id, path, rename, normalizedDiff);
+		void this.#checkPreviewPatchAsync(generation, toolCall.id, path, rename, normalizedDiff);
 	}
 
 	async #checkRemovedLinesAsync(
+		generation: number,
 		toolCallId: string,
 		path: string,
 		resolvedPath: string,
@@ -2503,6 +2523,7 @@ export class AgentSession {
 		if (this.#streamingEditAbortTriggered) return;
 		try {
 			const { text } = stripBom(await Bun.file(resolvedPath).text());
+			if (this.#promptGeneration !== generation) return;
 			const normalizedContent = normalizeToLF(text);
 			const missing = removedLines.find(line => !normalizedContent.includes(normalizeToLF(line)));
 			if (missing) {
@@ -2524,6 +2545,7 @@ export class AgentSession {
 	}
 
 	async #checkPreviewPatchAsync(
+		generation: number,
 		toolCallId: string,
 		path: string,
 		rename: string | undefined,
@@ -2540,6 +2562,7 @@ export class AgentSession {
 				},
 			);
 		} catch (error) {
+			if (this.#promptGeneration !== generation) return;
 			if (error instanceof ParseError) return;
 			this.#streamingEditAbortTriggered = true;
 			logger.warn("Streaming edit aborted due to patch preview failure", {
@@ -2711,7 +2734,7 @@ export class AgentSession {
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every API request carries `metadata.user_id` shaped
-	 * like real Claude Code's `getAPIMetadata` output: `{ session_id,
+	 * like real Anthropic Code's `getAPIMetadata` output: `{ session_id,
 	 * account_uuid }` (the latter only when an Anthropic OAuth credential with
 	 * a known account UUID is loaded). Resolving live keeps the value in sync
 	 * with auth-state changes (login/logout, token refresh that surfaces a new
@@ -3083,8 +3106,8 @@ export class AgentSession {
 
 	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to tool
 	 *  definitions whose `loadMode === "discoverable"`. This keeps hidden/internal tools
-	 *  (resolve, yield, report_finding, report_tool_issue) out of the index
-	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
+	 *  (resolve, yield, report_finding) out of the index and avoids mislabeling
+	 *  extension/custom default-inactive tools as built-ins. */
 	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
 		const activeNames = new Set(this.getActiveToolNames());
 		const result: DiscoverableTool[] = [];
@@ -3263,14 +3286,6 @@ export class AgentSession {
 			if (tool) {
 				tools.push(this.#wrapToolForAcpPermission(tool));
 				validToolNames.push(name);
-			}
-		}
-		// Auto-QA tool must survive any runtime tool-set mutation.
-		if (isAutoQaEnabled(this.settings) && !validToolNames.includes("report_tool_issue")) {
-			const qaTool = this.#toolRegistry.get("report_tool_issue");
-			if (qaTool) {
-				tools.push(this.#wrapToolForAcpPermission(qaTool));
-				validToolNames.push("report_tool_issue");
 			}
 		}
 		if (this.#mcpDiscoveryEnabled) {
@@ -3799,6 +3814,25 @@ export class AgentSession {
 		);
 	}
 
+	async #activatePendingGjcGoalModeRequest(): Promise<boolean> {
+		if (!this.settings.get("goal.enabled")) return false;
+		const pendingGoal = await consumePendingGoalModeRequest(this.sessionManager.getCwd());
+		if (!pendingGoal) return false;
+		const currentState = this.getGoalModeState();
+		if (currentState?.goal && currentState.goal.status !== "complete" && currentState.goal.status !== "dropped") {
+			return false;
+		}
+
+		const previousTools = this.getActiveToolNames().filter(name => name !== "goal");
+		const goalTools = [...new Set([...previousTools, "goal"])];
+		await this.#goalRuntime.createGoal({ objective: pendingGoal.objective });
+		await this.setActiveToolsByName(goalTools);
+		if (this.isStreaming) {
+			await this.sendGoalModeContext({ deliverAs: "steer" });
+		}
+		return true;
+	}
+
 	resolveRoleModel(role: string): Model | undefined {
 		return this.#resolveRoleModelFull(role, this.#modelRegistry.getAvailable(), this.model).model;
 	}
@@ -3806,7 +3840,7 @@ export class AgentSession {
 	/**
 	 * Resolve a role to its model AND thinking level.
 	 * Unlike resolveRoleModel(), this preserves the thinking level suffix
-	 * from role configuration (e.g., "anthropic/claude-sonnet-4-5:xhigh").
+	 * from role configuration (e.g., "anthropic/Anthropic model-sonnet-4-5:xhigh").
 	 */
 	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
 		return this.#resolveRoleModelFull(role, this.#modelRegistry.getAvailable(), this.model);
@@ -4008,6 +4042,41 @@ export class AgentSession {
 		}
 	}
 
+	async #syncSkillPromptActiveState(
+		message: Pick<CustomMessage<unknown>, "customType" | "details">,
+		active: boolean,
+	): Promise<void> {
+		if (message.customType !== SKILL_PROMPT_MESSAGE_TYPE) return;
+		const details = message.details;
+		if (!details || typeof details !== "object") return;
+		const name = (details as { name?: unknown }).name;
+		if (typeof name !== "string" || !isCanonicalGjcWorkflowSkill(name)) return;
+		const cwd = this.sessionManager.getCwd();
+		const sessionId = this.sessionManager.getSessionId();
+		await syncSkillActiveState({
+			cwd,
+			skill: name,
+			active,
+			phase: active ? "running" : "complete",
+			sessionId,
+			source: "skill-prompt",
+		});
+		this.#activeSkillState = active ? { skill: name, sessionId } : undefined;
+	}
+
+	async #syncSkillPromptActiveStateSafely(
+		message: Pick<CustomMessage<unknown>, "customType" | "details">,
+		active: boolean,
+	): Promise<void> {
+		try {
+			await this.#syncSkillPromptActiveState(message, active);
+		} catch {
+			// Skill HUD state is observational; a filesystem write failure must not
+			// interrupt the prompt turn it is visualizing. The native Stop hook still
+			// performs authoritative workflow blocking from persisted state.
+		}
+	}
+
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice">,
@@ -4038,7 +4107,12 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 
-		await this.#promptWithMessage(customMessage, textContent, options);
+		await this.#syncSkillPromptActiveStateSafely(customMessage, true);
+		try {
+			await this.#promptWithMessage(customMessage, textContent, options);
+		} finally {
+			await this.#syncSkillPromptActiveStateSafely(customMessage, false);
+		}
 	}
 
 	async #promptWithMessage(
@@ -4064,20 +4138,13 @@ export class AgentSession {
 
 			// Validate model
 			if (!this.model) {
-				throw new Error(
-					"No model selected.\n\n" +
-						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}\n\n` +
-						"Then use /model to select a model.",
-				);
+				throw new Error(formatNoModelOnboardingError());
 			}
 
 			// Validate API key
 			const apiKey = await this.#modelRegistry.getApiKey(this.model, this.sessionId);
 			if (!apiKey) {
-				throw new Error(
-					`No API key found for ${this.model.provider}.\n\n` +
-						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}`,
-				);
+				throw new Error(formatNoCredentialOnboardingError(this.model.provider));
 			}
 
 			// Check if we need to compact before sending (catches aborted responses)
@@ -4449,6 +4516,7 @@ export class AgentSession {
 
 		const prependMessages = queuedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
+		await this.#syncSkillPromptActiveStateSafely(message, true);
 		try {
 			await this.#promptWithMessage(message, textContent, {
 				prependMessages,
@@ -4457,6 +4525,8 @@ export class AgentSession {
 		} catch (error) {
 			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
 			throw error;
+		} finally {
+			await this.#syncSkillPromptActiveStateSafely(message, false);
 		}
 	}
 
@@ -4528,7 +4598,12 @@ export class AgentSession {
 					this.#queueHiddenNextTurnMessage(appMessage, false);
 					return;
 				}
-				await this.agent.prompt(appMessage);
+				await this.#syncSkillPromptActiveStateSafely(appMessage, true);
+				try {
+					await this.agent.prompt(appMessage);
+				} finally {
+					await this.#syncSkillPromptActiveStateSafely(appMessage, false);
+				}
 				return;
 			}
 			this.agent.appendMessage(appMessage);
@@ -4547,7 +4622,12 @@ export class AgentSession {
 				this.#queueHiddenNextTurnMessage(appMessage, false);
 				return;
 			}
-			await this.agent.prompt(appMessage);
+			await this.#syncSkillPromptActiveStateSafely(appMessage, true);
+			try {
+				await this.agent.prompt(appMessage);
+			} finally {
+				await this.#syncSkillPromptActiveStateSafely(appMessage, false);
+			}
 			return;
 		}
 
@@ -4663,7 +4743,7 @@ export class AgentSession {
 		return this.#skillsSettings;
 	}
 
-	/** Skills loaded by SDK (empty if --no-skills or skills: [] was passed) */
+	/** Skills loaded by SDK (always includes bundled GJC workflow defaults unless explicitly overridden by SDK callers) */
 	get skills(): readonly Skill[] {
 		return this.#skills;
 	}
@@ -4711,7 +4791,7 @@ export class AgentSession {
 	/**
 	 * Abort current operation and wait for agent to become idle.
 	 */
-	async abort(options?: { goalReason?: "interrupted" | "internal" }): Promise<void> {
+	async abort(options?: { goalReason?: "interrupted" | "internal"; timeoutMs?: number }): Promise<void> {
 		this.abortRetry();
 		this.#promptGeneration++;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -4721,8 +4801,31 @@ export class AgentSession {
 		this.abortEval();
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
-		await postPromptDrain;
-		await this.agent.waitForIdle();
+		const cleanup = Promise.all([postPromptDrain, this.agent.waitForIdle()]).then(
+			() => ({ type: "settled" as const }),
+			(error: unknown) => ({ type: "error" as const, error }),
+		);
+		cleanup.catch(() => {});
+		const timeoutMs = options?.timeoutMs;
+		if (timeoutMs !== undefined && timeoutMs > 0) {
+			const outcome = await Promise.race([cleanup, Bun.sleep(timeoutMs).then(() => ({ type: "timeout" as const }))]);
+			if (outcome.type === "timeout") {
+				this.#abandonPostPromptTasks();
+				this.agent.forceAbort("Abort cleanup timed out");
+				this.emitNotice(
+					"warning",
+					"Abort cleanup timed out; forced session recovery. The previous provider stream or tool may still be unwinding in the background.",
+					"abort",
+				);
+			} else if (outcome.type === "error") {
+				throw outcome.error;
+			}
+		} else {
+			const outcome = await cleanup;
+			if (outcome.type === "error") {
+				throw outcome.error;
+			}
+		}
 		await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 		// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 		// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
@@ -5163,7 +5266,7 @@ export class AgentSession {
 	 * True when *any* fast-mode-granting service tier is configured, regardless
 	 * of whether the active model's provider actually realizes it. Used by the
 	 * toggle (`/fast on|off`) so re-toggling a scoped tier (`openai-only`,
-	 * `claude-only`) doesn't silently broaden it to unscoped `priority`.
+	 * `Anthropic model-only`) doesn't silently broaden it to unscoped `priority`.
 	 *
 	 * For "is fast mode actually applied to the next request?" use
 	 * {@link isFastModeActive} instead — that one respects the model's provider.
@@ -5641,13 +5744,13 @@ export class AgentSession {
 		const generation = this.#promptGeneration;
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
+		// to a larger-context model (e.g. OpenAI code backend) - the overflow error from the old model
 		// shouldn't trigger compaction for the new model.
 		const sameModel =
 			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
 		// This handles the case where an error was kept after compaction (in the "kept" region).
 		// The error shouldn't trigger another compaction since we already compacted.
-		// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
+		// Example: opus fails -> switch to OpenAI code backend -> compact -> switch back to opus -> opus error
 		// is still in context but shouldn't trigger compaction again.
 		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
 		const errorIsFromBeforeCompaction =
@@ -7306,6 +7409,9 @@ export class AgentSession {
 			});
 			if (hookResult?.result) {
 				this.recordBashResult(command, hookResult.result, options);
+				if (hookResult.result.exitCode === 0 && !hookResult.result.cancelled) {
+					await this.#activatePendingGjcGoalModeRequest();
+				}
 				return hookResult.result;
 			}
 		}
@@ -7319,10 +7425,18 @@ export class AgentSession {
 				signal: abortController.signal,
 				sessionKey: this.sessionId,
 				timeout: clampTimeout("bash") * 1000,
+				env: buildGjcRuntimeSessionEnv({
+					sessionFile: this.sessionManager.getSessionFile(),
+					sessionId: this.sessionId,
+					cwd,
+				}),
 				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
 			});
 
 			this.recordBashResult(command, result, options);
+			if (result.exitCode === 0 && !result.cancelled) {
+				await this.#activatePendingGjcGoalModeRequest();
+			}
 			return result;
 		} finally {
 			this.#bashAbortControllers.delete(abortController);

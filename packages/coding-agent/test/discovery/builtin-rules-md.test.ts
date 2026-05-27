@@ -38,7 +38,7 @@ async function loadNativeRules(ctx: LoadContext): Promise<Rule[]> {
 
 beforeEach(() => {
 	clearCache();
-	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rules-md-"));
+	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-rules-md-"));
 	home = path.join(tempDir, "home");
 	project = path.join(tempDir, "project");
 	fs.mkdirSync(home, { recursive: true });

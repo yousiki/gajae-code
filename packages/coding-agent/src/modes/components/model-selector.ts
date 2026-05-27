@@ -1,5 +1,5 @@
 import { ThinkingLevel } from "@gajae-code/agent-core";
-import { getSupportedEfforts, type Model, modelsAreEqual } from "@gajae-code/ai";
+import { type Model, modelsAreEqual } from "@gajae-code/ai";
 import {
 	Container,
 	fuzzyFilter,
@@ -11,13 +11,13 @@ import {
 	TabBar,
 	Text,
 	type TUI,
-	visibleWidth,
 } from "@gajae-code/tui";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
+import { getRoleInfo } from "../../config/model-registry";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
+import { formatModelOnboardingInlineHint } from "../../setup/model-onboarding-guidance";
 import { getThinkingLevelMetadata } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
@@ -44,16 +44,7 @@ function getAlphaSearchTokens(query: string): string[] {
 }
 
 function computeModelRank(model: Model, roles: Record<string, RoleAssignment | undefined>): number {
-	let i = 0;
-	while (i < MODEL_ROLE_IDS.length) {
-		const role = MODEL_ROLE_IDS[i];
-		const assigned = roles[role];
-		if (assigned && modelsAreEqual(assigned.model, model)) {
-			break;
-		}
-		i++;
-	}
-	return i;
+	return roles.default && modelsAreEqual(roles.default.model, model) ? 0 : 1;
 }
 
 interface ModelItem {
@@ -85,12 +76,13 @@ interface RoleAssignment {
 	thinkingLevel: ThinkingLevel;
 }
 
-type RoleSelectCallback = (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void;
+type RoleSelectCallback = (
+	model: Model,
+	role: "default" | null,
+	thinkingLevel?: ThinkingLevel,
+	selector?: string,
+) => void;
 type CancelCallback = () => void;
-interface MenuRoleAction {
-	label: string;
-	role: string; // now accepts custom role strings
-}
 
 interface ProviderTabState {
 	id: string;
@@ -113,18 +105,17 @@ function createProviderTab(providerId: string): ProviderTabState {
 	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
 }
 /**
- * Component that renders a model selector with provider tabs and context menu.
+ * Component that renders a canonical model selector with provider tabs.
  * - Tab/Arrow Left/Right: Switch between provider tabs
  * - Arrow Up/Down: Navigate model list
- * - Enter: Open context menu to select action
- * - Escape: Close menu or selector
+ * - Enter: Select the highlighted model as the canonical/default model
+ * - Escape: Close selector
  */
 export class ModelSelectorComponent extends Container {
 	#searchInput: Input;
 	#headerContainer: Container;
 	#tabBar: TabBar | null = null;
 	#listContainer: Container;
-	#menuContainer: Container;
 	#allModels: ModelItem[] = [];
 	#filteredModels: ModelItem[] = [];
 	#canonicalModels: CanonicalModelItem[] = [];
@@ -140,17 +131,9 @@ export class ModelSelectorComponent extends Container {
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#temporaryOnly: boolean;
 
-	#menuRoleActions: MenuRoleAction[] = [];
-
 	// Tab state
 	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
-
-	// Context menu state
-	#isMenuOpen: boolean = false;
-	#menuSelectedIndex: number = 0;
-	#menuStep: "role" | "thinking" = "role";
-	#menuSelectedRole: string | null = null;
 
 	constructor(
 		tui: TUI,
@@ -158,7 +141,7 @@ export class ModelSelectorComponent extends Container {
 		settings: Settings,
 		modelRegistry: ModelRegistry,
 		scopedModels: ReadonlyArray<ScopedModelItem>,
-		onSelect: (model: Model, role: string | null, thinkingLevel?: ThinkingLevel, selector?: string) => void,
+		onSelect: (model: Model, role: "default" | null, thinkingLevel?: ThinkingLevel, selector?: string) => void,
 		onCancel: () => void,
 		options?: { temporaryOnly?: boolean; initialSearchInput?: string },
 	) {
@@ -173,9 +156,6 @@ export class ModelSelectorComponent extends Container {
 		this.#temporaryOnly = options?.temporaryOnly ?? false;
 		const initialSearchInput = options?.initialSearchInput;
 
-		// Initialize menu role actions (built-in + custom from settings)
-		this.#buildMenuRoleActions();
-
 		// Load current role assignments from settings
 		this.#loadRoleModels();
 
@@ -185,9 +165,7 @@ export class ModelSelectorComponent extends Container {
 
 		// Add hint about model filtering
 		const hintText =
-			scopedModels.length > 0
-				? "Showing models from --models scope"
-				: "Only showing models with configured API keys (see README for details)";
+			scopedModels.length > 0 ? "Showing models from --models scope" : formatModelOnboardingInlineHint();
 		this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
 		this.addChild(new Spacer(1));
 
@@ -203,9 +181,9 @@ export class ModelSelectorComponent extends Container {
 			this.#searchInput.setValue(initialSearchInput);
 		}
 		this.#searchInput.onSubmit = () => {
-			// Enter on search input opens menu if we have a selection
-			if (this.#filteredModels[this.#selectedIndex]) {
-				this.#openMenu();
+			const selectedItem = this.#getSelectedItem();
+			if (selectedItem) {
+				this.#handleSelect(selectedItem, this.#temporaryOnly ? null : "default");
 			}
 		};
 		this.addChild(this.#searchInput);
@@ -215,10 +193,6 @@ export class ModelSelectorComponent extends Container {
 		// Create list container
 		this.#listContainer = new Container();
 		this.addChild(this.#listContainer);
-
-		// Create menu container (hidden by default)
-		this.#menuContainer = new Container();
-		this.addChild(this.#menuContainer);
 
 		this.addChild(new Spacer(1));
 
@@ -242,21 +216,10 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	#buildMenuRoleActions(): void {
-		this.#menuRoleActions = getKnownRoleIds(this.#settings).map(role => {
-			const roleInfo = getRoleInfo(role, this.#settings);
-			const roleLabel = roleInfo.tag ? `${roleInfo.tag} (${roleInfo.name})` : roleInfo.name;
-			return {
-				label: `Set as ${roleLabel}`,
-				role,
-			};
-		});
-	}
-
 	#loadRoleModels(): void {
 		const allModels = this.#modelRegistry.getAll();
 		const matchPreferences = { usageOrder: this.#settings.getStorage()?.getModelUsageOrder() };
-		for (const role of getKnownRoleIds(this.#settings)) {
+		for (const role of ["default"]) {
 			const roleValue = this.#settings.getModelRole(role);
 			if (!roleValue) continue;
 
@@ -278,7 +241,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#sortModels(models: ModelItem[]): void {
-		// Sort: tagged models (default/smol/slow/plan) first, then MRU, then alphabetical
+		// Sort: default-tagged model first, then MRU, then alphabetical
 		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
 		const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
@@ -304,7 +267,7 @@ export class ModelSelectorComponent extends Container {
 			const providerCmp = a.provider.localeCompare(b.provider);
 			if (providerCmp !== 0) return providerCmp;
 
-			// Priority field (lower = better, e.g. Codex priority values)
+			// Priority field (lower = better, e.g. OpenAI code backend priority values)
 			const aPri = a.model.priority ?? Number.MAX_SAFE_INTEGER;
 			const bPri = b.model.priority ?? Number.MAX_SAFE_INTEGER;
 			if (aPri !== bPri) return aPri - bPri;
@@ -629,7 +592,7 @@ export class ModelSelectorComponent extends Container {
 					(age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.")
 				);
 			case "unauthenticated":
-				return "  Provider requires authentication before models can be discovered.";
+				return "  Provider requires authentication before discovery. Use /provider login or /login for OAuth/subscription providers, or /provider add for API-compatible providers.";
 			case "idle":
 				return "  Provider has not been refreshed yet.";
 			case "empty":
@@ -664,22 +627,11 @@ export class ModelSelectorComponent extends Container {
 
 			// Build role badges (inverted: color as background, black text)
 			const roleBadgeTokens: string[] = [];
-			for (const role of MODEL_ROLE_IDS) {
-				const { tag, color } = getRoleInfo(role, this.#settings);
-				const assigned = this.#roles[role];
-				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
-
-				const badge = makeInvertedBadge(tag, color ?? "success");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
-				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
-			}
-			// Custom role badges
-			for (const [role, assigned] of Object.entries(this.#roles)) {
-				if (role in MODEL_ROLES || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
-				const roleInfo = getRoleInfo(role, this.#settings);
-				const badgeLabel = roleInfo.tag ?? roleInfo.name;
-				const badge = makeInvertedBadge(badgeLabel, roleInfo.color ?? "muted");
-				const thinkingLabel = getThinkingLevelMetadata(assigned.thinkingLevel).label;
+			const defaultRoleInfo = getRoleInfo("default", this.#settings);
+			const defaultAssigned = this.#roles.default;
+			if (defaultRoleInfo.tag && defaultAssigned && modelsAreEqual(defaultAssigned.model, item.model)) {
+				const badge = makeInvertedBadge(defaultRoleInfo.tag, defaultRoleInfo.color ?? "success");
+				const thinkingLabel = getThinkingLevelMetadata(defaultAssigned.thinkingLevel).label;
 				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
@@ -728,7 +680,13 @@ export class ModelSelectorComponent extends Container {
 			}
 		} else if (visibleItems.length === 0) {
 			const statusMessage = this.#getProviderEmptyStateMessage();
-			this.#listContainer.addChild(new Text(theme.fg("muted", statusMessage ?? "  No matching models"), 0, 0));
+			this.#listContainer.addChild(
+				new Text(
+					theme.fg("muted", statusMessage ?? `  No matching models. ${formatModelOnboardingInlineHint()}`),
+					0,
+					0,
+				),
+			);
 		} else {
 			const selected = visibleItems[this.#selectedIndex];
 			if (!selected) {
@@ -743,19 +701,8 @@ export class ModelSelectorComponent extends Container {
 			);
 		}
 	}
-	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ThinkingLevel> {
-		return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
-	}
-
 	#getCurrentRoleThinkingLevel(role: string): ThinkingLevel {
 		return this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit;
-	}
-
-	#getThinkingPreselectIndex(role: string, model: Model): number {
-		const options = this.#getThinkingLevelsForModel(model);
-		const currentLevel = this.#getCurrentRoleThinkingLevel(role);
-		const foundIndex = options.indexOf(currentLevel);
-		return foundIndex >= 0 ? foundIndex : 0;
 	}
 
 	#getSelectedItem(): ModelItem | CanonicalModelItem | undefined {
@@ -764,88 +711,7 @@ export class ModelSelectorComponent extends Container {
 			: this.#filteredModels[this.#selectedIndex];
 	}
 
-	#openMenu(): void {
-		if (!this.#getSelectedItem()) return;
-
-		this.#isMenuOpen = true;
-		this.#menuStep = "role";
-		this.#menuSelectedRole = null;
-		this.#menuSelectedIndex = 0;
-		this.#updateMenu();
-	}
-
-	#closeMenu(): void {
-		this.#isMenuOpen = false;
-		this.#menuStep = "role";
-		this.#menuSelectedRole = null;
-		this.#menuContainer.clear();
-	}
-
-	#updateMenu(): void {
-		this.#menuContainer.clear();
-
-		const selectedItem = this.#getSelectedItem();
-		if (!selectedItem) return;
-
-		const showingThinking = this.#menuStep === "thinking" && this.#menuSelectedRole !== null;
-		const thinkingOptions = showingThinking ? this.#getThinkingLevelsForModel(selectedItem.model) : [];
-		const optionLines = showingThinking
-			? thinkingOptions.map((thinkingLevel, index) => {
-					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					const label = getThinkingLevelMetadata(thinkingLevel).label;
-					return `${prefix}${label}`;
-				})
-			: this.#menuRoleActions.map((action, index) => {
-					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					return `${prefix}${action.label}`;
-				});
-
-		const selectedRoleName = this.#menuSelectedRole ? getRoleInfo(this.#menuSelectedRole, this.#settings).name : "";
-		const headerText =
-			showingThinking && this.#menuSelectedRole
-				? `  Thinking for: ${selectedRoleName} (${selectedItem.id})`
-				: `  Action for: ${selectedItem.id}`;
-		const hintText = showingThinking ? "  Enter: confirm  Esc: back" : "  Enter: continue  Esc: cancel";
-		const menuWidth = Math.max(
-			visibleWidth(headerText),
-			visibleWidth(hintText),
-			...optionLines.map(line => visibleWidth(line)),
-		);
-
-		this.#menuContainer.addChild(new Spacer(1));
-		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
-		if (showingThinking && this.#menuSelectedRole) {
-			this.#menuContainer.addChild(
-				new Text(
-					theme.fg("text", `  Thinking for: ${theme.bold(selectedRoleName)} (${theme.bold(selectedItem.id)})`),
-					0,
-					0,
-				),
-			);
-		} else {
-			this.#menuContainer.addChild(new Text(theme.fg("text", `  Action for: ${theme.bold(selectedItem.id)}`), 0, 0));
-		}
-		this.#menuContainer.addChild(new Spacer(1));
-
-		for (let i = 0; i < optionLines.length; i++) {
-			const lineText = optionLines[i];
-			if (!lineText) continue;
-			const isSelected = i === this.#menuSelectedIndex;
-			const line = isSelected ? theme.fg("accent", lineText) : theme.fg("muted", lineText);
-			this.#menuContainer.addChild(new Text(line, 0, 0));
-		}
-
-		this.#menuContainer.addChild(new Spacer(1));
-		this.#menuContainer.addChild(new Text(theme.fg("dim", hintText), 0, 0));
-		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
-	}
-
 	handleInput(keyData: string): void {
-		if (this.#isMenuOpen) {
-			this.#handleMenuInput(keyData);
-			return;
-		}
-
 		// Tab bar navigation
 		if (this.#tabBar?.handleInput(keyData)) {
 			return;
@@ -869,16 +735,12 @@ export class ModelSelectorComponent extends Container {
 			return;
 		}
 
-		// Enter - open context menu or select directly in temporary mode
+		// Enter - select highlighted model directly. Canonical setup exposes one default model,
+		// while temporary-only mode keeps the existing non-persistent quick-switch behavior.
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selectedItem = this.#getSelectedItem();
 			if (selectedItem) {
-				if (this.#temporaryOnly) {
-					// In temporary mode, skip menu and select directly
-					this.#handleSelect(selectedItem, null);
-				} else {
-					this.#openMenu();
-				}
+				this.#handleSelect(selectedItem, this.#temporaryOnly ? null : "default");
 			}
 			return;
 		}
@@ -893,63 +755,7 @@ export class ModelSelectorComponent extends Container {
 		this.#searchInput.handleInput(keyData);
 		this.#filterModels(this.#searchInput.getValue());
 	}
-	#handleMenuInput(keyData: string): void {
-		const selectedItem = this.#getSelectedItem();
-		if (!selectedItem) return;
-
-		const optionCount =
-			this.#menuStep === "thinking" && this.#menuSelectedRole !== null
-				? this.#getThinkingLevelsForModel(selectedItem.model).length
-				: this.#menuRoleActions.length;
-		if (optionCount === 0) return;
-
-		if (matchesKey(keyData, "up")) {
-			this.#menuSelectedIndex = (this.#menuSelectedIndex - 1 + optionCount) % optionCount;
-			this.#updateMenu();
-			return;
-		}
-
-		if (matchesKey(keyData, "down")) {
-			this.#menuSelectedIndex = (this.#menuSelectedIndex + 1) % optionCount;
-			this.#updateMenu();
-			return;
-		}
-
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			if (this.#menuStep === "role") {
-				const action = this.#menuRoleActions[this.#menuSelectedIndex];
-				if (!action) return;
-				this.#menuSelectedRole = action.role;
-				this.#menuStep = "thinking";
-				this.#menuSelectedIndex = this.#getThinkingPreselectIndex(action.role, selectedItem.model);
-				this.#updateMenu();
-				return;
-			}
-
-			if (!this.#menuSelectedRole) return;
-			const thinkingOptions = this.#getThinkingLevelsForModel(selectedItem.model);
-			const thinkingLevel = thinkingOptions[this.#menuSelectedIndex];
-			if (!thinkingLevel) return;
-			this.#handleSelect(selectedItem, this.#menuSelectedRole, thinkingLevel);
-			this.#closeMenu();
-			return;
-		}
-
-		if (getKeybindings().matches(keyData, "tui.select.cancel")) {
-			if (this.#menuStep === "thinking" && this.#menuSelectedRole !== null) {
-				this.#menuStep = "role";
-				const roleIndex = this.#menuRoleActions.findIndex(action => action.role === this.#menuSelectedRole);
-				this.#menuSelectedRole = null;
-				this.#menuSelectedIndex = roleIndex >= 0 ? roleIndex : 0;
-				this.#updateMenu();
-				return;
-			}
-			this.#closeMenu();
-			return;
-		}
-	}
-
-	#handleSelect(item: ModelItem | CanonicalModelItem, role: string | null, thinkingLevel?: ThinkingLevel): void {
+	#handleSelect(item: ModelItem | CanonicalModelItem, role: "default" | null, thinkingLevel?: ThinkingLevel): void {
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
 			this.#onSelectCallback(item.model, null, undefined, item.selector);
@@ -973,12 +779,12 @@ export class ModelSelectorComponent extends Container {
 	}
 }
 
-/** Extract the first version number from a model ID (e.g. "gemini-2.5-pro" → 2.5, "claude-sonnet-4-6" → 4.6). */
+/** Extract the first version number from a model ID (e.g. "gemini-2.5-pro" → 2.5, "Anthropic model-sonnet-4-6" → 4.6). */
 function extractVersionNumber(id: string): number {
 	// Dot-separated version: "gemini-2.5-pro" → 2.5
 	const dotMatch = id.match(/(?:^|[-_])(\d+\.\d+)/);
 	if (dotMatch) return Number.parseFloat(dotMatch[1]);
-	// Dash-separated short segments: "claude-sonnet-4-6" → 4.6, "llama-3-1-8b" → 3.1
+	// Dash-separated short segments: "Anthropic model-sonnet-4-6" → 4.6, "llama-3-1-8b" → 3.1
 	const dashMatch = id.match(/(?:^|[-_])(\d{1,2})-(\d{1,2})(?=-|$)/);
 	if (dashMatch) return Number.parseFloat(`${dashMatch[1]}.${dashMatch[2]}`);
 	// Single number after separator: "gpt-4o" → 4

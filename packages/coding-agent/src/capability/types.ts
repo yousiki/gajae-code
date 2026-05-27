@@ -1,9 +1,9 @@
 /**
  * Core types for the capability-based config discovery system.
  *
- * This architecture inverts control: instead of callers knowing about paths like
- * `.claude`, `.codex`, `.gemini`, they simply ask for `load("mcps")` and get back
- * a unified array of MCP servers.
+ * This architecture inverts control: instead of callers knowing provider-specific
+ * paths like `.gjc`, `.gemini`, or `.vscode`, they simply ask for `load("mcps")`
+ * and get back a unified array of MCP servers.
  */
 
 /**
@@ -31,20 +31,20 @@ export interface LoadResult<T> {
  * A provider that can load items for a capability.
  */
 export interface Provider<T> {
-	/** Unique provider ID (e.g., "claude", "gjc", "mcp-json", "agents-md") */
+	/** Unique provider ID (e.g., "Anthropic model", "gjc", "mcp-json", "agents-md") */
 	id: string;
 
-	/** Human-readable name for UI display (e.g., "Claude Code", "OpenAI Codex") */
+	/** Human-readable name for UI display (e.g., "Anthropic Code", "OpenAI code provider") */
 	displayName: string;
 
-	/** Short description for settings UI (e.g., "Load config from ~/.claude and .claude/") */
+	/** Short description for settings UI (e.g., "Load config from .gjc/") */
 	description: string;
 
 	/**
 	 * Priority (higher = checked first, wins on conflicts).
 	 * Suggested ranges:
 	 *   100+ : Primary providers (gjc, pi)
-	 *   50-99: Tool-specific providers (claude, codex, gemini)
+	 *   50-99: Tool-specific providers (Anthropic model, OpenAI code backend, gemini)
 	 *   1-49 : Shared standards (mcp-json, agents-md)
 	 */
 	priority: number;

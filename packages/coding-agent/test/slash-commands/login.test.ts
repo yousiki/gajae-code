@@ -103,3 +103,61 @@ describe("/login slash command", () => {
 		expect(harness.getWarning()).toBe("No OAuth login is waiting for a manual callback.");
 	});
 });
+
+describe("interactive provider/model auth slash wiring", () => {
+	it("routes /logout provider to provider-specific interactive logout", async () => {
+		const manualInput = new OAuthManualInputManager();
+		const harness = createRuntimeHarness(manualInput);
+
+		const handled = await executeBuiltinSlashCommand("/logout kagi", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.getSelectorMode()).toBe("logout");
+		expect(harness.getSelectorProvider()).toBe("kagi");
+	});
+
+	it("opens the model selector for /model in TUI", async () => {
+		let modelSelectorShown = false;
+		let editorText: string | undefined;
+		const ctx = {
+			editor: { setText: (text: string) => (editorText = text) } as unknown as InteractiveModeContext["editor"],
+			showModelSelector: () => {
+				modelSelectorShown = true;
+			},
+		} as InteractiveModeContext;
+
+		const handled = await executeBuiltinSlashCommand("/model", { ctx, handleBackgroundCommand: () => {} });
+
+		expect(handled).toBe(true);
+		expect(modelSelectorShown).toBe(true);
+		expect(editorText).toBe("");
+	});
+
+	it("opens provider onboarding selector for bare /provider in TUI", async () => {
+		let providerOnboardingShown = false;
+		let editorText: string | undefined;
+		const ctx = {
+			editor: { setText: (text: string) => (editorText = text) } as unknown as InteractiveModeContext["editor"],
+			showProviderOnboarding: () => {
+				providerOnboardingShown = true;
+			},
+		} as InteractiveModeContext;
+
+		const handled = await executeBuiltinSlashCommand("/provider", { ctx, handleBackgroundCommand: () => {} });
+
+		expect(handled).toBe(true);
+		expect(providerOnboardingShown).toBe(true);
+		expect(editorText).toBe("");
+	});
+
+	it("routes /provider login provider to the OAuth selector", async () => {
+		const manualInput = new OAuthManualInputManager();
+		const harness = createRuntimeHarness(manualInput);
+
+		const handled = await executeBuiltinSlashCommand("/provider login kagi", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.getSelectorMode()).toBe("login");
+		expect(harness.getSelectorProvider()).toBe("kagi");
+	});
+});

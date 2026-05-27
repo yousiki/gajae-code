@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, TUI } from "@gajae-code/tui";
+import { visibleWidth } from "@gajae-code/tui/utils";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -44,9 +45,21 @@ function countMatches(lines: string[], pattern: RegExp): number {
 
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
+	let previousTmux: string | undefined;
+	let previousSty: string | undefined;
+	let previousZellij: string | undefined;
+	let previousLegacyFullRender: string | undefined;
 	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
 
 	beforeEach(() => {
+		previousTmux = Bun.env.TMUX;
+		previousSty = Bun.env.STY;
+		previousZellij = Bun.env.ZELLIJ;
+		previousLegacyFullRender = Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+		delete Bun.env.TMUX;
+		delete Bun.env.STY;
+		delete Bun.env.ZELLIJ;
+		delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
 		monotonicNow = 0;
 		vi.spyOn(performance, "now").mockImplementation(() => {
 			monotonicNow += 20;
@@ -56,6 +69,26 @@ describe("TUI terminal-state regressions", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		if (previousTmux === undefined) {
+			delete Bun.env.TMUX;
+		} else {
+			Bun.env.TMUX = previousTmux;
+		}
+		if (previousSty === undefined) {
+			delete Bun.env.STY;
+		} else {
+			Bun.env.STY = previousSty;
+		}
+		if (previousZellij === undefined) {
+			delete Bun.env.ZELLIJ;
+		} else {
+			Bun.env.ZELLIJ = previousZellij;
+		}
+		if (previousLegacyFullRender === undefined) {
+			delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+		} else {
+			Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER = previousLegacyFullRender;
+		}
 	});
 
 	describe("cursor + differential stability", () => {
@@ -200,6 +233,24 @@ describe("TUI terminal-state regressions", () => {
 				expect(viewport[0]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[1]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[2]?.trim()).toBe("");
+			} finally {
+				tui.stop();
+			}
+		});
+		it("truncates compatibility jamo before the terminal can auto-wrap them", async () => {
+			const term = new VirtualTerminal(10, 6);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(["ㅁ".repeat(20)]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const viewport = visible(term);
+				expect(viewport[0]).toBe("ㅁ".repeat(5));
+				expect(visibleWidth(viewport[0]!)).toBe(10);
+				expect(viewport[1]?.trim()).toBe("");
 			} finally {
 				tui.stop();
 			}
@@ -623,6 +674,107 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("scrollback integrity", () => {
+		it("repaints only the visible viewport for offscreen changes in tmux", async () => {
+			Bun.env.TMUX = "1";
+			delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const lines = rows("line-", 80);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const before = visible(term);
+
+				term.clearWriteLog();
+				const nextLines = [...lines];
+				nextLines[0] = "updated-offscreen-header";
+				component.setLines(nextLines);
+				tui.requestRender();
+				await settle(term);
+
+				expect(visible(term)).toEqual(before);
+				const writes = term.getWriteLog().join("");
+				expect(writes).not.toContain("\x1b[3J");
+				expect(writes).not.toContain("\x1b[2J");
+				expect(writes).not.toContain("updated-offscreen-header");
+				expect(writes).toContain("line-79");
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("keeps a legacy full-render kill switch for multiplexer viewport repaint", async () => {
+			Bun.env.TMUX = "1";
+			Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER = "1";
+
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const lines = rows("line-", 80);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				term.clearWriteLog();
+				const nextLines = [...lines];
+				nextLines[0] = "updated-offscreen-header";
+				component.setLines(nextLines);
+				tui.requestRender();
+				await settle(term);
+
+				const writes = term.getWriteLog().join("");
+				expect(writes).toContain("\x1b[2J\x1b[H");
+				expect(writes).not.toContain("\x1b[3J");
+				expect(writes).toContain("updated-offscreen-header");
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("refreshes newly visible rows after a tmux height increase", async () => {
+			Bun.env.TMUX = "1";
+			delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+
+			const term = new VirtualTerminal(32, 5);
+			const tui = new TUI(term);
+			const lines = rows("line-", 80);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const nextLines = [...lines];
+				nextLines[70] = "UPDATED-70";
+				component.setLines(nextLines);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term).join("\n")).not.toContain("UPDATED-70");
+
+				term.clearWriteLog();
+				term.resize(32, 12);
+				await settle(term);
+
+				const viewport = visible(term).join("\n");
+				expect(viewport).toContain("UPDATED-70");
+				expect(viewport).not.toContain("line-70");
+				const writes = term.getWriteLog().join("");
+				expect(writes).not.toContain("\x1b[3J");
+				expect(writes).not.toContain("\x1b[2J");
+				expect(writes).not.toContain("line-0");
+				expect(writes).toContain("UPDATED-70");
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("overflow content appears once across buffer without duplicate row IDs", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
@@ -838,9 +990,11 @@ describe("TUI terminal-state regressions", () => {
 
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
+			const originalWrite = term.write.bind(term);
 			const spy = vi.spyOn(term, "write");
 			spy.mockImplementation((data: string) => {
 				writes.push(data);
+				originalWrite(data);
 			});
 			return writes;
 		}

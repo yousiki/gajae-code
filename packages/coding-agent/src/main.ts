@@ -30,21 +30,8 @@ import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
-import {
-	clearPluginRootsAndCaches,
-	injectPluginDirRoots,
-	preloadPluginRoots,
-	resolveActiveProjectRegistryPath,
-} from "./discovery/helpers";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import {
-	getInstalledPluginsRegistryPath,
-	getMarketplacesCacheDir,
-	getMarketplacesRegistryPath,
-	getPluginsCacheDir,
-	MarketplaceManager,
-} from "./extensibility/plugins/marketplace";
 import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
@@ -58,6 +45,7 @@ import {
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
+import { formatModelOnboardingGuidance } from "./setup/model-onboarding-guidance";
 import { resolvePromptInput } from "./system-prompt";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
@@ -655,29 +643,13 @@ async function buildSessionOptions(
 		options.enableLsp = false;
 	}
 
-	// Skills
-	if (parsed.noSkills) {
-		options.skills = [];
-	} else if (parsed.skills && parsed.skills.length > 0) {
-		// Override includeSkills for this session
-		activeSettings.override("skills.includeSkills", parsed.skills as string[]);
-	}
-
 	// Rules
 	if (parsed.noRules) {
 		options.rules = [];
 	}
 
-	// Additional extension paths from CLI
-	const cliExtensionPaths = parsed.noExtensions ? [] : [...(parsed.extensions ?? []), ...(parsed.hooks ?? [])];
-	if (cliExtensionPaths.length > 0) {
-		options.additionalExtensionPaths = cliExtensionPaths;
-	}
-
-	if (parsed.noExtensions) {
-		options.disableExtensionDiscovery = true;
-		options.additionalExtensionPaths = [];
-	}
+	options.disableExtensionDiscovery = true;
+	options.additionalExtensionPaths = [];
 
 	return { options };
 }
@@ -715,23 +687,15 @@ export async function runRootCommand(
 	}
 
 	if (parsedArgs.listModels !== undefined) {
-		const settingsInstance = await logger.time("settings:init:list-models", Settings.init, {
-			cwd: getProjectDir(),
-		});
 		await modelRegistry.refresh("online");
-		const cliExtensionPaths = parsedArgs.noExtensions
-			? []
-			: [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
-		const settingsExtensions = settingsInstance.get("extensions") ?? [];
-		const disabledExtensionIds = settingsInstance.get("disabledExtensions") ?? [];
 		const searchPattern = typeof parsedArgs.listModels === "string" ? parsedArgs.listModels : undefined;
 		await runListModelsCommand({
 			modelRegistry,
 			cwd: getProjectDir(),
-			additionalExtensionPaths: cliExtensionPaths,
-			settingsExtensions,
-			disabledExtensionIds,
-			disableExtensionDiscovery: Boolean(parsedArgs.noExtensions),
+			additionalExtensionPaths: [],
+			settingsExtensions: [],
+			disabledExtensionIds: [],
+			disableExtensionDiscovery: true,
 			searchPattern,
 		});
 		process.exit(0);
@@ -755,17 +719,6 @@ export async function runRootCommand(
 		process.stderr.write(`${chalk.red("Error: @file arguments are not supported in RPC mode")}\n`);
 		process.exit(1);
 	}
-
-	// Kick off plugin-root preload in parallel with the remaining startup work.
-	// Awaited later (before extension/skill discovery in createAgentSession needs it).
-	const home = os.homedir();
-	const pluginPreloadPromise =
-		parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
-			? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
-			: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
-	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
-	// warning before we reach the await site below.
-	pluginPreloadPromise.catch(() => {});
 
 	const cwd = getProjectDir();
 	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
@@ -862,36 +815,6 @@ export async function runRootCommand(
 		sessionManager = await SessionManager.open(selectedPath);
 	}
 
-	await pluginPreloadPromise;
-
-	// Background marketplace auto-update — never blocks startup.
-	const autoUpdate = settingsInstance.get("marketplace.autoUpdate");
-	if (autoUpdate !== "off") {
-		void (async () => {
-			try {
-				const mgr = new MarketplaceManager({
-					marketplacesRegistryPath: getMarketplacesRegistryPath(),
-					installedRegistryPath: getInstalledPluginsRegistryPath(),
-					projectInstalledRegistryPath: (await resolveActiveProjectRegistryPath(getProjectDir())) ?? undefined,
-					marketplacesCacheDir: getMarketplacesCacheDir(),
-					pluginsCacheDir: getPluginsCacheDir(),
-					clearPluginRootsCache: clearPluginRootsAndCaches,
-				});
-				await mgr.refreshStaleMarketplaces();
-				const updates = await mgr.checkForUpdates();
-				if (updates.length === 0) return;
-				if (autoUpdate === "auto") {
-					await mgr.upgradeAllPlugins();
-					logger.debug(`Auto-upgraded ${updates.length} marketplace plugin(s)`);
-				} else {
-					logger.debug(`${updates.length} marketplace plugin update(s) available — /marketplace upgrade`);
-				}
-			} catch {
-				// Silently ignore — network failure, corrupt data, offline.
-			}
-		})();
-	}
-
 	const { options: sessionOptions } = await logger.time(
 		"buildSessionOptions",
 		buildSessionOptions,
@@ -957,17 +880,22 @@ export async function runRootCommand(
 			notifs.push({ kind: "error", message: modelRegistryError.message });
 		}
 
+		if (isInteractive && !session.model && !modelFallbackMessage) {
+			notifs.push({
+				kind: "info",
+				message: `No usable model is configured yet. ${formatModelOnboardingGuidance()}`,
+			});
+		}
+
 		applyExtensionFlagValues(session, rawArgs);
 
 		if (!isInteractive && !session.model) {
-			if (modelFallbackMessage) {
-				process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-			} else {
-				process.stderr.write(`${chalk.red("No models available.")}\n`);
-			}
-			process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
-			process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-			process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+			process.stderr.write(
+				`${chalk.red(modelFallbackMessage ?? `No models available. ${formatModelOnboardingGuidance()}`)}\n`,
+			);
+			process.stderr.write(
+				`${chalk.yellow(`\nAdvanced manual config remains available at ${ModelsConfigFile.path()}`)}\n`,
+			);
 			process.exit(1);
 		}
 

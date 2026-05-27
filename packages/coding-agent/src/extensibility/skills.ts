@@ -16,12 +16,14 @@ export interface Skill {
 	source: string;
 	/**
 	 * When `true`, the skill is loaded and reachable via `skill://<name>` and
-	 * (when enabled) `/skill:<name>`, but is excluded from the rendered system
-	 * prompt's `<skills>` listing.
+	 * skill slash aliases, but is excluded from the rendered system prompt's
+	 * `<skills>` listing.
 	 */
 	hide?: boolean;
 	/** Source metadata for display */
 	_source?: SourceMeta;
+	/** Embedded SKILL.md content for bundled defaults that survive .gjc deletion. */
+	content?: string;
 }
 
 export interface SkillWarning {
@@ -282,11 +284,94 @@ export function getSkillSlashCommandName(skill: Pick<Skill, "name">): string {
 	return `skill:${skill.name}`;
 }
 
+export function isNamespacedSkillSlashCommandName(commandName: string): boolean {
+	return commandName.startsWith("skill:");
+}
+
+export function getSkillSlashCommandNames(skill: Pick<Skill, "name">): string[] {
+	return [getSkillSlashCommandName(skill)];
+}
+
+export function isSkillSlashCommandName(commandName: string, skill: Pick<Skill, "name">): boolean {
+	return commandName === getSkillSlashCommandName(skill);
+}
+
+export interface ResolvedSkillSlashCommand {
+	name: string;
+	description: string;
+	skill: Skill;
+}
+
+export interface ParsedSkillInvocation {
+	commandName: string;
+	args: string;
+	skill: Skill;
+}
+
+interface SkillTokenMatch {
+	index: number;
+	end: number;
+	commandName: string;
+	skill: Skill;
+}
+
+export function parseSkillInvocations(
+	text: string,
+	skillsByCommandName: ReadonlyMap<string, Skill>,
+): ParsedSkillInvocation[] {
+	const trimmedText = text.trim();
+	if (!trimmedText.startsWith("/")) return [];
+	const canonicalSkillCommandPattern = /(^|\s)\/(skill:[^\s]+)/g;
+	const matches: SkillTokenMatch[] = [];
+	for (const match of trimmedText.matchAll(canonicalSkillCommandPattern)) {
+		const commandName = match[2];
+		if (!commandName) continue;
+		const skill = skillsByCommandName.get(commandName);
+		if (!skill) continue;
+		const leading = match[1] ?? "";
+		const index = (match.index ?? 0) + leading.length;
+		matches.push({
+			index,
+			end: index + commandName.length + 1,
+			commandName,
+			skill,
+		});
+	}
+	if (matches.length === 0 || matches[0]?.index !== 0) return [];
+	return matches.map((match, index) => {
+		const next = matches[index + 1];
+		return {
+			commandName: match.commandName,
+			args: trimmedText.slice(match.end, next?.index).trim(),
+			skill: match.skill,
+		};
+	});
+}
+
+export function resolveSkillSlashCommands(
+	skills: readonly Skill[],
+	_reservedDirectCommandNames: ReadonlySet<string>,
+): ResolvedSkillSlashCommand[] {
+	const commands: ResolvedSkillSlashCommand[] = [];
+	const claimedNames = new Set<string>();
+	for (const skill of skills) {
+		if (skill.hide === true) continue;
+		for (const name of getSkillSlashCommandNames(skill)) {
+			if (claimedNames.has(name)) {
+				continue;
+			}
+			claimedNames.add(name);
+			commands.push({ name, description: skill.description, skill });
+		}
+	}
+	return commands;
+}
+
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath">,
+	skill: Pick<Skill, "name" | "filePath" | "content">,
 	args: string,
 ): Promise<BuiltSkillPromptMessage> {
-	const content = await Bun.file(skill.filePath).text();
+	const content = typeof skill.content === "string" ? skill.content : await Bun.file(skill.filePath).text();
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 	const metaLines = [`Skill: ${skill.filePath}`];
 	const trimmedArgs = args.trim();

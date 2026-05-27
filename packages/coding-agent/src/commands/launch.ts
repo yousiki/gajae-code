@@ -3,9 +3,11 @@
  */
 
 import { THINKING_EFFORTS } from "@gajae-code/ai";
-import { APP_NAME } from "@gajae-code/utils";
+import { APP_NAME, setProjectDir } from "@gajae-code/utils";
 import { Args, Command, Flags } from "@gajae-code/utils/cli";
 import { parseArgs } from "../cli/args";
+import { launchDefaultTmuxIfNeeded } from "../gjc-runtime/launch-tmux";
+import { prepareLaunchWorktree } from "../gjc-runtime/launch-worktree";
 import { runRootCommand } from "../main";
 import { prepareAcpTerminalAuthArgs } from "../modes/acp/terminal-auth";
 
@@ -83,6 +85,9 @@ export default class Index extends Command {
 		"no-pty": Flags.boolean({
 			description: "Disable PTY-based interactive bash execution",
 		}),
+		tmux: Flags.boolean({
+			description: "Launch interactive startup inside tmux",
+		}),
 		tools: Flags.string({
 			description: "Comma-separated list of tools to enable (default: all)",
 		}),
@@ -128,6 +133,7 @@ export default class Index extends Command {
 		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
 		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
 		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,
+		`# Launch in a sibling git worktree\n  ${APP_NAME} --worktree`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
 		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.gjc/agent/sessions/--path--/session.jsonl`,
@@ -137,7 +143,19 @@ export default class Index extends Command {
 
 	async run(): Promise<void> {
 		const { args } = prepareAcpTerminalAuthArgs(this.argv);
-		const parsed = parseArgs(args);
-		await runRootCommand(parsed, args);
+		const parsed = parseArgs([...args]);
+		if (parsed.help || parsed.version) {
+			await runRootCommand(parsed, args);
+			return;
+		}
+
+		const launch = prepareLaunchWorktree(process.cwd(), args);
+		if (launch.worktree.enabled) {
+			process.chdir(launch.cwd);
+			setProjectDir(launch.cwd);
+		}
+		const launchParsed = parseArgs(launch.args);
+		if (launchDefaultTmuxIfNeeded({ parsed: launchParsed, rawArgs: launch.args, cwd: launch.cwd })) return;
+		await runRootCommand(launchParsed, launch.args);
 	}
 }

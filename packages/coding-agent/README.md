@@ -34,4 +34,4 @@ Switching backends mid-session is honoured on the next system-prompt rebuild and
 
 ## Red-claw TUI theme
 
-The interactive TUI ships with a bundled `red-claw` crustacean theme and matching welcome/icon assets. Select it from Settings → Appearance or set `theme.dark: red-claw` in `~/.gjc/agent/config.yml`.
+The interactive TUI defaults to the bundled `red-claw` crustacean theme for dark terminals, with matching welcome/icon assets. Explicit user theme settings still win; set `theme.dark: red-claw` in `~/.gjc/agent/config.yml` to pin it.

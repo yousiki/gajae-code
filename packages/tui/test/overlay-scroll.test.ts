@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, TUI } from "@gajae-code/tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -88,6 +88,45 @@ async function flushRender(term: VirtualTerminal): Promise<void> {
 }
 
 describe("TUI overlays", () => {
+	let previousTmux: string | undefined;
+	let previousSty: string | undefined;
+	let previousZellij: string | undefined;
+	let previousLegacyFullRender: string | undefined;
+
+	beforeEach(() => {
+		previousTmux = Bun.env.TMUX;
+		previousSty = Bun.env.STY;
+		previousZellij = Bun.env.ZELLIJ;
+		previousLegacyFullRender = Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+		delete Bun.env.TMUX;
+		delete Bun.env.STY;
+		delete Bun.env.ZELLIJ;
+		delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+	});
+
+	afterEach(() => {
+		if (previousTmux === undefined) {
+			delete Bun.env.TMUX;
+		} else {
+			Bun.env.TMUX = previousTmux;
+		}
+		if (previousSty === undefined) {
+			delete Bun.env.STY;
+		} else {
+			Bun.env.STY = previousSty;
+		}
+		if (previousZellij === undefined) {
+			delete Bun.env.ZELLIJ;
+		} else {
+			Bun.env.ZELLIJ = previousZellij;
+		}
+		if (previousLegacyFullRender === undefined) {
+			delete Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER;
+		} else {
+			Bun.env.PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER = previousLegacyFullRender;
+		}
+	});
+
 	it("does not scroll the terminal when an overlay is shown with a large historical working area", async () => {
 		const term = new VirtualTerminal(80, 24);
 		const tui = new TUI(term);

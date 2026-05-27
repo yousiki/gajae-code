@@ -4,8 +4,6 @@ import type { OAuthProvider } from "@gajae-code/ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@gajae-code/tui";
 import { Input, Loader, Spacer, Text } from "@gajae-code/tui";
 import { getAgentDbPath, getProjectDir } from "@gajae-code/utils";
-import { getRoleInfo } from "../../config/model-registry";
-import { formatModelSelectorValue } from "../../config/model-resolver";
 import { settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
@@ -29,6 +27,10 @@ import {
 import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import {
+	MODEL_ONBOARDING_API_PROVIDER_COMMAND,
+	MODEL_ONBOARDING_SETUP_COMMAND,
+} from "../../setup/model-onboarding-guidance";
 import { isSearchProviderPreference, setPreferredImageProvider, setPreferredSearchProvider } from "../../tools";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
@@ -38,6 +40,10 @@ import { HistorySearchComponent } from "../components/history-search";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
+import {
+	type ProviderOnboardingAction,
+	ProviderOnboardingSelectorComponent,
+} from "../components/provider-onboarding-selector";
 import { SessionObserverOverlayComponent } from "../components/session-observer-overlay";
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
@@ -55,6 +61,14 @@ const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
 ]);
 
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
+
+function formatProviderOnboardingCommandGuide(): string {
+	return [
+		"API-compatible provider setup:",
+		MODEL_ONBOARDING_API_PROVIDER_COMMAND,
+		MODEL_ONBOARDING_SETUP_COMMAND,
+	].join("\n");
+}
 
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -84,6 +98,26 @@ export class SelectorController {
 		this.ctx.editorContainer.addChild(component);
 		this.ctx.ui.setFocus(focus);
 		this.ctx.ui.requestRender();
+	}
+
+	showProviderOnboarding(): void {
+		this.showSelector(done => {
+			const selector = new ProviderOnboardingSelectorComponent(
+				(action: ProviderOnboardingAction) => {
+					done();
+					if (action === "oauth-login") {
+						void this.showOAuthSelector("login");
+					} else {
+						this.ctx.showStatus(formatProviderOnboardingCommandGuide());
+					}
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
 	}
 
 	showSettingsSelector(): void {
@@ -407,7 +441,7 @@ export class SelectorController {
 							this.ctx.showStatus(`Temporary model: ${selector ?? model.id}`);
 							done();
 							this.ctx.ui.requestRender();
-						} else if (role === "default") {
+						} else {
 							// Default: update agent state and persist
 							await this.ctx.session.setModel(model, role, {
 								selector,
@@ -419,17 +453,8 @@ export class SelectorController {
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
 							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
-							// Don't call done() - selector stays open for role assignment
-						} else {
-							// Other roles (smol, slow): just update settings, not current model
-							this.ctx.settings.setModelRole(
-								role,
-								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, thinkingLevel),
-							);
-							const roleInfo = getRoleInfo(role, settings);
-							const roleLabel = roleInfo?.name ?? role;
-							this.ctx.showStatus(`${roleLabel} model: ${selector ?? model.id}`);
-							// Don't call done() - selector stays open
+							done();
+							this.ctx.ui.requestRender();
 						}
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -916,6 +941,11 @@ export class SelectorController {
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		if (providerId) {
+			const oauthProvider = getOAuthProviders().find(provider => provider.id === providerId);
+			if (!oauthProvider) {
+				this.ctx.showError(`Unknown OAuth provider: ${providerId}`);
+				return;
+			}
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);
 			} else {

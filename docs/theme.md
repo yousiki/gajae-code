@@ -163,11 +163,11 @@ Auto theme slot selection uses terminal appearance in this order:
 3. macOS appearance fallback only for the known-broken macOS/Zellij OSC 11 path
 4. dark slot fallback
 
-Built-in theme note: `red-claw` is the bundled crustacean theme, with red/orange shell colors and crab-oriented symbol overrides.
+Built-in theme note: `red-claw` is the default dark GJC theme, with red/orange brand tokens, separate semantic error/warning/diff-removal tokens, and crab-oriented symbol overrides.
 
 Current defaults from settings schema:
 
-- `theme.dark = "titanium"`
+- `theme.dark = "red-claw"`
 - `theme.light = "light"`
 - `symbolPreset = "unicode"`
 - `colorBlindMode = false`

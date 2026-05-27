@@ -12,6 +12,7 @@ export class VirtualTerminal implements Terminal {
 	private xterm: XtermTerminalType;
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
+	#writeLog: string[] = [];
 	private _columns: number;
 	private _rows: number;
 
@@ -48,7 +49,16 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	write(data: string): void {
+		this.#writeLog.push(data);
 		this.xterm.write(data);
+	}
+
+	getWriteLog(): string[] {
+		return [...this.#writeLog];
+	}
+
+	clearWriteLog(): void {
+		this.#writeLog = [];
 	}
 
 	get columns(): number {

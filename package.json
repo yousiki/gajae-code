@@ -87,7 +87,7 @@
     "test:ts": "bun run --workspaces --if-present test -- --only-failures",
     "test:rs": "bun scripts/run-rs-task.ts test:rs",
     "check": "bun run --parallel check:ts check:rs",
-    "check:ts": "bun run check:tools && bun run --workspaces --if-present check",
+    "check:ts": "bun run check:tools && bun run check:gjc-ui && bun run --workspaces --if-present check",
     "check:tools": "biome check . --no-errors-on-unmatched",
     "check:rs": "bun scripts/run-rs-task.ts check:rs",
     "lint": "bun run --parallel lint:ts lint:rs",
@@ -144,7 +144,8 @@
     "generate-models": "bun --cwd=packages/ai run generate-models",
     "generate-docs-index": "bun --cwd=packages/coding-agent run generate-docs-index",
     "generate-template": "bun --cwd=packages/coding-agent run generate-template",
-    "check-spoofed-versions": "bun scripts/check-spoofed-versions.ts"
+    "check-spoofed-versions": "bun scripts/check-spoofed-versions.ts",
+    "check:gjc-ui": "bun scripts/verify-gjc-ui-redesign.ts && bun scripts/rebrand-inventory.ts --strict"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

@@ -7,11 +7,11 @@ import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
-import { GoalTool } from "../goals/tools/goal-tool";
+import { CreateGoalTool, GetGoalTool, GoalTool, UpdateGoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import { LspTool } from "../lsp";
 import type { PlanModeState } from "../plan-mode/state";
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
@@ -43,12 +43,12 @@ import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import { RecipeTool } from "./recipe";
 import { RenderMermaidTool } from "./render-mermaid";
-import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchTool } from "./search";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
+import { SubagentTool } from "./subagent";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
 import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
@@ -80,12 +80,12 @@ export * from "./job";
 export * from "./read";
 export * from "./recipe";
 export * from "./render-mermaid";
-export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
 export * from "./search";
 export * from "./search-tool-bm25";
 export * from "./ssh";
+export * from "./subagent";
 export * from "./todo-write";
 export * from "./vim";
 export * from "./write";
@@ -297,6 +297,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
+	subagent: s => new SubagentTool(s),
 	job: JobTool.createIf,
 	recipe: RecipeTool.createIf,
 	irc: IrcTool.createIf,
@@ -307,14 +308,18 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	retain: HindsightRetainTool.createIf,
 	recall: HindsightRecallTool.createIf,
 	reflect: HindsightReflectTool.createIf,
+	goal: s => new GoalTool(s),
+	get_goal: GetGoalTool.createIf,
+	create_goal: CreateGoalTool.createIf,
+	update_goal: UpdateGoalTool.createIf,
 };
+
+const GOAL_MODE_TOOL_NAMES = ["get_goal", "create_goal", "update_goal"] as const;
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	yield: s => new YieldTool(s),
 	report_finding: () => reportFindingTool,
-	report_tool_issue: s => createReportToolIssueTool(s),
 	resolve: s => new ResolveTool(s),
-	goal: s => new GoalTool(s),
 };
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
@@ -364,9 +369,14 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	let requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
 	const goalEnabled = session.settings.get("goal.enabled");
-	const goalModeActive = goalEnabled && session.getGoalModeState?.()?.enabled === true;
-	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
+	const goalStateToolNames = [...GOAL_MODE_TOOL_NAMES];
+	if (goalEnabled && session.getGoalRuntime !== undefined && requestedTools && !requestedTools.includes("goal")) {
 		requestedTools = [...requestedTools, "goal"];
+	}
+	if (goalEnabled && requestedTools) {
+		for (const name of goalStateToolNames) {
+			if (!requestedTools.includes(name)) requestedTools.push(name);
+		}
 	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
@@ -439,7 +449,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
-		if (name === "goal") return goalEnabled && goalModeActive;
+		if (name === "goal") return goalEnabled && session.getGoalRuntime !== undefined;
+		if (goalStateToolNames.includes(name as (typeof GOAL_MODE_TOOL_NAMES)[number])) return goalEnabled;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return true;
 		if (name === "eval") return allowEval;
@@ -460,9 +471,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") {
 			if (!session.settings.get("irc.enabled")) return false;
-			// Main agent only needs `irc` when subagents may run concurrently (async).
-			// In sync mode main blocks on `task`, so peer messaging from main is dead weight.
-			if (!session.settings.get("async.enabled") && session.getAgentId?.() === MAIN_AGENT_ID) return false;
+			// Task subagents now detach regardless of async.enabled, so the main agent
+			// may need IRC coordination whenever IRC itself is enabled.
 			return true;
 		}
 		if (name === "recipe") return session.settings.get("recipe.enabled");
@@ -489,7 +499,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.filter(([name]) => isToolAllowed(name))
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
-					...(goalModeActive ? ([["goal", HIDDEN_TOOLS.goal]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(
@@ -503,23 +512,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		const resolveTool = await logger.time("createTools:resolve", HIDDEN_TOOLS.resolve, session);
 		if (resolveTool) {
 			tools.push(wrapToolWithMetaNotice(resolveTool));
-		}
-	}
-
-	// Auto-inject report_tool_issue when autoqa is enabled (env or setting).
-	// Injected unconditionally into every agent, regardless of requested tool list.
-	const autoQA = isAutoQaEnabled(session.settings);
-	if (autoQA && !tools.some(t => t.name === "report_tool_issue")) {
-		// Build the enum from tools we just constructed via BUILTIN_TOOLS / HIDDEN_TOOLS.
-		// Extension overrides (e.g. a user's custom `bash`) get added later by
-		// other code paths, so they're absent here — exactly what we want; MCP /
-		// extension tools never end up in the report enum.
-		const activeBuiltinNames = tools
-			.map(t => t.name)
-			.filter(name => (name in BUILTIN_TOOLS || name in HIDDEN_TOOLS) && name !== "report_tool_issue");
-		const qaTool = createReportToolIssueTool(session, activeBuiltinNames);
-		if (qaTool) {
-			tools.push(wrapToolWithMetaNotice(qaTool));
 		}
 	}
 

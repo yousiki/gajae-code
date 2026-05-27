@@ -1,7 +1,7 @@
 ---
 name: ralplan
 description: Consensus planning entrypoint that auto-gates vague team/ultragoal requests before execution
-argument-hint: "[--interactive] [--deliberate] [--architect codex] [--critic codex] <task description>"
+argument-hint: "[--interactive] [--deliberate] [--architect openai-code] [--critic openai-code] <task description>"
 level: 4
 
 source: "forked from upstream ralplan skill and rebranded for GJC"
@@ -21,8 +21,8 @@ Ralplan is a shorthand alias for `/gajae-code:plan --consensus`. It triggers ite
 
 - `--interactive`: Enables user prompts at key decision points (draft review in step 2 and final approval in step 6). Without this flag the workflow runs fully automated — Planner → Architect → Critic loop — marks the final plan `pending approval`, outputs it, and stops without asking for confirmation or executing changes.
 - `--deliberate`: Forces deliberate mode for high-risk work. Adds pre-mortem (3 scenarios) and expanded test planning (unit/integration/e2e/observability). Without this flag, deliberate mode can still auto-enable when the request explicitly signals high risk (auth/security, migrations, destructive changes, production incidents, compliance/PII, public API breakage).
-- `--architect codex`: Use Codex for the Architect pass when Codex CLI is available. Otherwise, briefly note the fallback and keep the default GJC Architect review.
-- `--critic codex`: Use Codex for the Critic pass when Codex CLI is available. Otherwise, briefly note the fallback and keep the default GJC Critic review.
+- `--architect openai-code`: Use OpenAI code for the Architect pass when OpenAI code CLI is available. Otherwise, briefly note the fallback and keep the default GJC Architect review.
+- `--critic openai-code`: Use OpenAI code for the Critic pass when OpenAI code CLI is available. Otherwise, briefly note the fallback and keep the default GJC Critic review.
 
 ## Usage with interactive mode
 
@@ -138,5 +138,5 @@ The gate auto-passes when it detects **any** concrete signal. You do not need al
 |-------|----------|
 | Gate fires on a well-specified prompt | Add a file reference, function name, or issue number to anchor the request |
 | Want to bypass the gate | Prefix with `force:` or `!` (e.g., `force: team fix it`) |
-| Gate does not fire on a vague prompt | The gate only catches prompts with <=15 effective words and no concrete anchors; add more detail or use `/ralplan` explicitly |
+| Gate does not fire on a vague prompt | The gate only catches prompts with <=15 effective words and no concrete anchors; add more detail or use `/skill:ralplan` explicitly |
 | Redirected to ralplan but want execution | Use the structured approval option or explicitly say which execution skill should proceed; `just do it` / `skip planning` alone only ends planning with a `pending approval` artifact |

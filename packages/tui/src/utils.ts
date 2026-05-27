@@ -90,7 +90,10 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function getSegmenter(): Intl.Segmenter {
 	return segmenter;
 }
-
+function normalizeForWidth(str: string): string {
+	const normalized = str.normalize("NFC");
+	return normalized === str ? str : normalized;
+}
 export function visibleWidthRaw(str: string): number {
 	if (!str) {
 		return 0;
@@ -100,34 +103,18 @@ export function visibleWidthRaw(str: string): number {
 	let tabLength = 0;
 	const tabWidth = getDefaultTabWidth();
 	let isPureAscii = true;
-	let jamoOvercount = 0;
 	for (let i = 0; i < str.length; i++) {
 		const code = str.charCodeAt(i);
 		if (code === 9) {
 			tabLength += tabWidth;
 		} else if (code < 0x20 || code > 0x7e) {
 			isPureAscii = false;
-			// Hangul Compatibility Jamo (U+3131..U+318E) is EAW=W per UAX#11,
-			// so `Bun.stringWidth` returns 2 for each — but every macOS
-			// terminal we ship to (Ghostty, Terminal.app, iTerm2) renders
-			// them as a single cell in monospace fonts. Without this
-			// correction every jamo a Korean IME emits during composition
-			// adds 1 cell of drift to `#extractCursorPosition`, displacing
-			// the hardware cursor (and therefore the IME candidate window)
-			// `N_jamo` cells past the visible glyph. Hangul Syllables
-			// (U+AC00..U+D7A3, e.g. `안`) are correctly 2 cells in both Bun
-			// and the terminal — leave those alone. The Halfwidth Hangul
-			// block (U+FFA0..U+FFDC) is already Narrow in Bun, so no
-			// correction needed there.
-			if (code >= 0x3131 && code <= 0x318e) {
-				jamoOvercount++;
-			}
 		}
 	}
 	if (isPureAscii) {
 		return str.length + tabLength;
 	}
-	return Bun.stringWidth(str) - jamoOvercount + tabLength;
+	return Bun.stringWidth(normalizeForWidth(str)) + tabLength;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type SettingPath, Settings } from "@gajae-code/coding-agent/config/settings";
-import { createTools, HIDDEN_TOOLS, type ToolSession } from "@gajae-code/coding-agent/tools";
+import { BUILTIN_TOOLS, createTools, HIDDEN_TOOLS, type ToolSession } from "@gajae-code/coding-agent/tools";
 
 Bun.env.PI_PYTHON_SKIP_CHECK = "1";
 
@@ -261,17 +261,33 @@ describe("createTools", () => {
 		const requestedTools = await createTools(session, ["read"]);
 		expect(requestedTools.map(t => t.name)).toEqual(["read", "resolve"]);
 	});
-	it("auto-includes goal when goal mode is active", async () => {
+	it("auto-includes goal tools when goal mode is enabled", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
 				"goal.enabled": true,
 			}),
 			getGoalModeState: () => createActiveGoalState(),
+			getGoalRuntime: () =>
+				({}) as NonNullable<ToolSession["getGoalRuntime"]> extends () => infer Runtime ? Runtime : never,
 		});
 		const tools = await createTools(session, ["read"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "goal", "resolve"]);
+		expect(names).toEqual(["read", "goal", "get_goal", "create_goal", "update_goal", "resolve"]);
+	});
+
+	it("exposes legacy goal even when no goal is active", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({
+				"goal.enabled": true,
+			}),
+			getGoalRuntime: () =>
+				({}) as NonNullable<ToolSession["getGoalRuntime"]> extends () => infer Runtime ? Runtime : never,
+		});
+		const tools = await createTools(session, ["read"]);
+		const names = tools.map(t => t.name);
+
+		expect(names).toEqual(["read", "goal", "get_goal", "create_goal", "update_goal", "resolve"]);
 	});
 
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {
@@ -287,13 +303,10 @@ describe("createTools", () => {
 		expect(names).toContain("search_tool_bm25");
 	});
 
-	it("HIDDEN_TOOLS contains review tools and goal", () => {
-		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
-			"goal",
-			"report_finding",
-			"report_tool_issue",
-			"resolve",
-			"yield",
-		]);
+	it("exposes all goal tools as builtins", () => {
+		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual(["report_finding", "resolve", "yield"]);
+		expect(Object.keys(BUILTIN_TOOLS)).toEqual(
+			expect.arrayContaining(["goal", "get_goal", "create_goal", "update_goal"]),
+		);
 	});
 });

@@ -17,7 +17,23 @@ function normalizeRenderedText(text: string): string {
 	);
 }
 
-function createSelector(model: Model, settings: Settings): ModelSelectorComponent {
+interface SelectionCapture {
+	model: Model;
+	role: "default" | null;
+	thinkingLevel: unknown;
+	selector: string | undefined;
+}
+
+function createSelector(
+	model: Model,
+	settings: Settings,
+	onSelect: (
+		model: Model,
+		role: "default" | null,
+		thinkingLevel: unknown,
+		selector: string | undefined,
+	) => void = () => {},
+): ModelSelectorComponent {
 	const modelRegistry = {
 		getAll: () => [model],
 		getDiscoverableProviders: () => [],
@@ -34,7 +50,7 @@ function createSelector(model: Model, settings: Settings): ModelSelectorComponen
 		settings,
 		modelRegistry,
 		[{ model, thinkingLevel: "off" }],
-		() => {},
+		onSelect,
 		() => {},
 	);
 }
@@ -62,7 +78,7 @@ function installTestTheme(): void {
 	setThemeInstance(testTheme);
 }
 
-describe("ModelSelector role badge thinking display", () => {
+describe("ModelSelector canonical model selection", () => {
 	beforeAll(async () => {
 		testTheme = await getThemeByName("dark");
 		if (!testTheme) {
@@ -70,7 +86,7 @@ describe("ModelSelector role badge thinking display", () => {
 		}
 	});
 
-	test("shows custom roles from cycleOrder/modelRoles and honors built-in metadata overrides", async () => {
+	test("uses canonical default-only model assignment even when legacy roles are configured", async () => {
 		installTestTheme();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
@@ -78,8 +94,8 @@ describe("ModelSelector role badge thinking display", () => {
 		const settings = Settings.isolated({
 			cycleOrder: ["smol", "custom-fast", "default"],
 			modelRoles: {
-				default: `${model.provider}/${model.id}`,
-				"custom-fast": `${model.provider}/${model.id}:low`,
+				default: `${model.provider}/${model.id}:low`,
+				"custom-fast": `${model.provider}/${model.id}:high`,
 				smol: `${model.provider}/${model.id}`,
 			},
 			modelTags: {
@@ -87,19 +103,31 @@ describe("ModelSelector role badge thinking display", () => {
 			},
 		});
 
-		const selector = createSelector(model, settings);
+		let selected: SelectionCapture | undefined;
+		const selector = createSelector(model, settings, (selectedModel, role, thinkingLevel, selectorValue) => {
+			selected = { model: selectedModel, role, thinkingLevel, selector: selectorValue };
+		});
 		await Bun.sleep(0);
 		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(rendered).toContain("custom-fast (low)");
-		expect(rendered).toContain("SMOL (inherit)");
+		expect(rendered).toContain("DEFAULT (low)");
+		expect(rendered).not.toContain("custom-fast");
+		expect(rendered).not.toContain("SMOL");
 
 		selector.handleInput("\n");
 		installTestTheme();
-		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(menuRendered).toContain("Set as custom-fast");
-		expect(menuRendered).toContain("Set as SMOL (Quick)");
+		const selectedAfterEnter = selected;
+		if (!selectedAfterEnter) throw new Error("Expected Enter to select a model");
+		expect(selectedAfterEnter.model).toBe(model);
+		expect(selectedAfterEnter.role).toBe("default");
+		expect(selectedAfterEnter.selector).toBe(`${model.provider}/${model.id}`);
+
+		const afterEnterRendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(afterEnterRendered).not.toContain("Action for:");
+		expect(afterEnterRendered).not.toContain("Set as DEFAULT");
+		expect(afterEnterRendered).not.toContain("Set as custom-fast");
+		expect(afterEnterRendered).not.toContain("Set as SMOL");
 	});
 
 	test("refreshes Ollama Cloud using provider id instead of tab label", async () => {

@@ -22,11 +22,20 @@ type LegacyHit = {
 	token: string;
 };
 
+type MetadataViolation = {
+	field: string;
+	reason: string;
+};
+
 const repoRoot = process.cwd();
 
-const expectedVisibleDefinitions = ["deep-interview", "ralplan", "team", "ultragoal"] as const;
+const expectedBundledWorkflowSkills = ["deep-interview", "ralplan", "team", "ultragoal"] as const;
+const expectedBundledRoleAgents = ["architect", "critic", "executor", "planner"] as const;
 const expectedPackageScope = "@gajae-code/";
 const expectedCliBins = ["gjc", "gjc-stats", "gjc-swarm"] as const;
+const expectedRootPackageName = "gajae-code";
+const rootPublicMetadataFields = ["name", "description", "homepage", "repository", "bugs"] as const;
+const rootLegacyScriptKeys = new Set(["test:py"]);
 
 const ignoredDirs = new Set([".git", "node_modules", ".gjc", "dist", "build", "coverage", ".turbo"]);
 const ignoredFiles = new Set(["bun.lock", "Cargo.lock"]);
@@ -42,7 +51,28 @@ const legacyAllowlist = [
 	{
 		name: "attribution-and-license",
 		path: /(^LICENSE$|(^|\/)(CHANGELOG|NOTICE|AUTHORS)\.md$)/,
-		rationale: "Historical attribution files may mention upstream names.",
+		rationale: "Historical attribution may mention upstream names.",
+	},
+	{
+		name: "compatibility-docs",
+		path: /^docs\/(environment-variables|python-repl|task-agent-discovery|REBRANDING_PLAN_260525)\.md$/,
+		rationale: "Compatibility docs and the approved rebranding plan may describe retained legacy env/protocol names and historical boundaries.",
+	},
+	{
+		name: "tool-and-extension-reference-docs",
+		path: /^docs\/(tools\/|skills\/|extension-loading|plugin-manager-installer-plumbing|natives-(addon-loader-runtime|architecture|build-release-debugging)|notebook-tool-runtime)/,
+		rationale: "Reference docs may name retained internal protocols, artifacts, and compatibility paths without presenting them as the current product brand.",
+	},
+
+	{
+		name: "legacy-runtime-root-scripts",
+		path: /^package\.json$/,
+		rationale: "Specific root package scripts may reference retained legacy runtime roots while public metadata remains GJC-branded.",
+	},
+	{
+		name: "runtime-compatibility-internals",
+		path: /^packages\/(coding-agent|agent|ai|tui|utils|stats|swarm-extension|natives)\//,
+		rationale: "Runtime internals may retain legacy aliases while user-facing copy is rebranded.",
 	},
 ] as const;
 
@@ -127,8 +157,25 @@ function listVisibleDefinitions(): VisibleDefinition[] {
 	].sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
 }
 
-function allowlistFor(filePath: string): string | undefined {
+function listBundledWorkflowSkills(): VisibleDefinition[] {
+	return listSkillDirs("packages/coding-agent/src/defaults/gjc/skills").sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
+function listBundledRoleAgents(): VisibleDefinition[] {
+	return listDefinitionFiles("packages/coding-agent/src/prompts/agents", "agent", [".md"])
+		.filter(def => expectedBundledRoleAgents.includes(def.name as (typeof expectedBundledRoleAgents)[number]))
+		.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
+function allowlistFor(filePath: string, line: string): string | undefined {
+	if (filePath === "package.json") return rootScriptAllowlistFor(line);
 	return legacyAllowlist.find(entry => entry.path.test(filePath))?.name;
+}
+
+function rootScriptAllowlistFor(line: string): string | undefined {
+	const match = line.match(/^\s*"([^"]+)"\s*:/);
+	if (!match) return undefined;
+	return rootLegacyScriptKeys.has(match[1] ?? "") ? "legacy-runtime-root-scripts" : undefined;
 }
 
 function scanLegacyHits(): LegacyHit[] {
@@ -153,7 +200,7 @@ function scanLegacyHits(): LegacyHit[] {
 			for (const { token, pattern } of legacyTokenPatterns) {
 				pattern.lastIndex = 0;
 				if (pattern.test(line)) {
-					hits.push({ allowlist: allowlistFor(rel), line: index + 1, path: rel, token });
+					hits.push({ allowlist: allowlistFor(rel, line), line: index + 1, path: rel, token });
 				}
 			}
 		}
@@ -161,24 +208,55 @@ function scanLegacyHits(): LegacyHit[] {
 	return hits;
 }
 
+function collectRootMetadataViolations(): MetadataViolation[] {
+	const rootPackage = readJson(path.join(repoRoot, "package.json"));
+	const violations: MetadataViolation[] = [];
+	if (rootPackage.name !== expectedRootPackageName) {
+		violations.push({ field: "name", reason: `expected ${expectedRootPackageName}, found ${String(rootPackage.name ?? "<missing>")}` });
+	}
+
+	for (const field of rootPublicMetadataFields) {
+		const value = rootPackage[field];
+		const serialized = typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
+		for (const { token, pattern } of legacyTokenPatterns) {
+			pattern.lastIndex = 0;
+			if (pattern.test(serialized)) {
+				violations.push({ field, reason: `contains legacy token ${token}` });
+			}
+		}
+	}
+
+	return violations;
+}
+
 const packages = listPackages();
 const visibleDefinitions = listVisibleDefinitions();
+const bundledWorkflowSkills = listBundledWorkflowSkills();
+const bundledRoleAgents = listBundledRoleAgents();
 const legacyHits = scanLegacyHits();
-const unexpectedDefinitions = visibleDefinitions.filter(def => !expectedVisibleDefinitions.includes(def.name as (typeof expectedVisibleDefinitions)[number]));
-const missingDefinitions = expectedVisibleDefinitions.filter(name => !visibleDefinitions.some(def => def.name === name));
+const unexpectedDefinitions = visibleDefinitions;
+const unexpectedBundledWorkflowSkills = bundledWorkflowSkills.filter(def => !expectedBundledWorkflowSkills.includes(def.name as (typeof expectedBundledWorkflowSkills)[number]));
+const unexpectedBundledRoleAgents = bundledRoleAgents.filter(def => !expectedBundledRoleAgents.includes(def.name as (typeof expectedBundledRoleAgents)[number]));
+const missingBundledWorkflowSkills = expectedBundledWorkflowSkills.filter(name => !bundledWorkflowSkills.some(def => def.name === name));
+const missingBundledRoleAgents = expectedBundledRoleAgents.filter(name => !bundledRoleAgents.some(def => def.name === name));
 const nonGajaePackages = packages.filter(pkg => pkg.name && !pkg.name.startsWith(expectedPackageScope));
 const observedBins = [...new Set(packages.flatMap(pkg => pkg.bins))].sort();
 const missingBins = expectedCliBins.filter(bin => !observedBins.includes(bin));
 const unexpectedLegacyHits = legacyHits.filter(hit => !hit.allowlist);
+const rootMetadataViolations = collectRootMetadataViolations();
 
 const report = {
 	allowlists: {
 		cliBins: expectedCliBins,
+		bundledRoleAgents: expectedBundledRoleAgents,
+		bundledWorkflowSkills: expectedBundledWorkflowSkills,
 		legacyReferences: legacyAllowlist.map(entry => ({ name: entry.name, rationale: entry.rationale })),
 		packageScope: expectedPackageScope,
-		visibleDefinitions: expectedVisibleDefinitions,
+		visibleDefinitions: [],
 	},
 	inventory: {
+		bundledRoleAgents,
+		bundledWorkflowSkills,
 		legacyHits: {
 			allowlisted: legacyHits.length - unexpectedLegacyHits.length,
 			unexpected: unexpectedLegacyHits.slice(0, 50),
@@ -188,8 +266,12 @@ const report = {
 	},
 	violations: {
 		missingBins,
-		missingDefinitions,
+		missingBundledRoleAgents,
+		missingBundledWorkflowSkills,
 		nonGajaePackages,
+		rootMetadataViolations,
+		unexpectedBundledRoleAgents,
+		unexpectedBundledWorkflowSkills,
 		unexpectedDefinitions,
 		unexpectedLegacyHitCount: unexpectedLegacyHits.length,
 	},
@@ -205,6 +287,8 @@ if (process.argv.includes("--json")) {
 		JSON.stringify(
 			{
 				legacyHits: report.inventory.legacyHits,
+				bundledRoleAgents: bundledRoleAgents.map(def => `${def.type}:${def.name}`),
+				bundledWorkflowSkills: bundledWorkflowSkills.map(def => `${def.type}:${def.name}`),
 				packageCount: packages.length,
 				visibleDefinitions: visibleDefinitions.map(def => `${def.type}:${def.name}`),
 				violations: report.violations,
@@ -218,8 +302,12 @@ if (process.argv.includes("--json")) {
 if (process.argv.includes("--strict")) {
 	const hasViolation =
 		missingBins.length > 0 ||
-		missingDefinitions.length > 0 ||
+		missingBundledRoleAgents.length > 0 ||
+		missingBundledWorkflowSkills.length > 0 ||
 		nonGajaePackages.length > 0 ||
+		rootMetadataViolations.length > 0 ||
+		unexpectedBundledRoleAgents.length > 0 ||
+		unexpectedBundledWorkflowSkills.length > 0 ||
 		unexpectedDefinitions.length > 0 ||
 		unexpectedLegacyHits.length > 0;
 	if (hasViolation) process.exit(1);

@@ -50,7 +50,13 @@ import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
+import {
+	buildSkillPromptMessage,
+	getSkillSlashCommandNames,
+	isNamespacedSkillSlashCommandName,
+	isSkillSlashCommandName,
+	parseSkillInvocations,
+} from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
@@ -641,8 +647,10 @@ export class AcpAgent implements Agent {
 	}
 
 	async #runPromptOrCommand(record: ManagedSessionRecord, text: string, images: AgentImageContent[]): Promise<void> {
-		const skillResult = await this.#tryRunSkillCommand(record, text);
-		if (skillResult) {
+		// Namespaced skill commands cannot collide with ACP builtins; handle
+		// them before builtin dispatch. Bare `/name` aliases are intentionally
+		// not skill commands.
+		if (text.startsWith("/skill:") && (await this.#tryRunSkillCommand(record, text))) {
 			return;
 		}
 
@@ -686,21 +694,66 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
+		if (await this.#tryRunSkillCommand(record, text, { directAliasMayCollide: false })) {
+			return;
+		}
+
 		await record.session.prompt(text, { images });
 	}
 
-	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
-		if (!text.startsWith("/skill:")) {
+	async #tryRunSkillCommand(
+		record: ManagedSessionRecord,
+		text: string,
+		options: { directAliasMayCollide?: boolean } = {},
+	): Promise<boolean> {
+		if (!text.startsWith("/")) {
 			return false;
 		}
 		if (!record.session.skillsSettings?.enableSkillCommands) {
 			return false;
 		}
+		const skillsByCommandName = new Map(
+			record.session.skills
+				.filter(skill => skill.hide !== true)
+				.flatMap(skill => getSkillSlashCommandNames(skill).map(commandName => [commandName, skill] as const)),
+		);
+		const invocations = parseSkillInvocations(text, skillsByCommandName);
+		if (invocations.length > 0) {
+			for (let index = 0; index < invocations.length; index += 1) {
+				const invocation = invocations[index];
+				if (!invocation) continue;
+				const built = await buildSkillPromptMessage(invocation.skill, invocation.args);
+				if (index === invocations.length - 1) {
+					await record.session.promptCustomMessage({
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: built.message,
+						display: true,
+						details: built.details,
+						attribution: "user",
+					});
+				} else {
+					await record.session.sendCustomMessage({
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: built.message,
+						display: true,
+						details: built.details,
+						attribution: "user",
+					});
+				}
+			}
+			return true;
+		}
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillName = commandName.slice("skill:".length);
-		const skill = record.session.skills.find(candidate => candidate.name === skillName);
+		if (
+			!isNamespacedSkillSlashCommandName(commandName) &&
+			options.directAliasMayCollide !== true &&
+			(await this.#directSkillAliasCollides(record, commandName))
+		) {
+			return false;
+		}
+		const skill = record.session.skills.find(candidate => isSkillSlashCommandName(commandName, candidate));
 		if (!skill || skill.hide === true) {
 			return false;
 		}
@@ -713,6 +766,14 @@ export class AcpAgent implements Agent {
 			attribution: "user",
 		});
 		return true;
+	}
+
+	async #directSkillAliasCollides(record: ManagedSessionRecord, commandName: string): Promise<boolean> {
+		if (record.session.customCommands.some(command => command.command.name === commandName)) {
+			return true;
+		}
+		const fileCommands = await loadSlashCommands({ cwd: record.session.sessionManager.getCwd() });
+		return fileCommands.some(command => command.name === commandName);
 	}
 
 	async cancel(params: { sessionId: string }): Promise<void> {
@@ -773,7 +834,7 @@ export class AcpAgent implements Agent {
 
 	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
 		switch (method) {
-			case "_omp/sessions/listAll": {
+			case "_gjc/sessions/listAll": {
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
 				const sessions = await SessionManager.listAll();
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
@@ -782,7 +843,7 @@ export class AcpAgent implements Agent {
 					total: sessions.length,
 				};
 			}
-			case "_omp/projects/list": {
+			case "_gjc/projects/list": {
 				const sessions = await SessionManager.listAll();
 				const buckets = new Map<
 					string,
@@ -810,7 +871,7 @@ export class AcpAgent implements Agent {
 				const projects = Array.from(buckets.values()).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 				return { projects, totalSessions: sessions.length };
 			}
-			case "_omp/chats/byCwd": {
+			case "_gjc/chats/byCwd": {
 				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				if (!cwd) throw new Error("cwd required");
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(500, params.limit as number)) : 100;
@@ -818,7 +879,7 @@ export class AcpAgent implements Agent {
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
 				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
 			}
-			case "_omp/usage": {
+			case "_gjc/usage": {
 				const [firstRecord] = this.#sessions.values();
 				const target = firstRecord?.session ?? this.#initialSession;
 				if (!target) {
@@ -827,14 +888,14 @@ export class AcpAgent implements Agent {
 				const reports = await target.fetchUsageReports();
 				return { reports: reports ?? [] };
 			}
-			case "_omp/extensions": {
+			case "_gjc/extensions": {
 				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				const sm = await Settings.init();
 				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
 				const extensions = await loadAllExtensions(cwd, disabledIds);
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
-			case "_omp/extensions/toggle": {
+			case "_gjc/extensions/toggle": {
 				const providerId = params.providerId;
 				if (typeof providerId !== "string") throw new Error("providerId required");
 				if (params.enabled === false) {
@@ -1396,23 +1457,10 @@ export class AcpAgent implements Agent {
 			commands.push(command);
 		};
 
-		// Advertise in the order dispatch resolves them: ACP builtins first
-		// (so core commands like `/model`, `/mcp`, `/todo` cannot be shadowed),
-		// then skills, then custom/user commands, then file-based slash
-		// commands. `appendCommand` dedupes by name so earlier entries win.
+		// Advertise builtins first, then custom/user commands, then file-based
+		// slash commands, then namespaced `/skill:<name>` skills.
 		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
 			appendCommand(command);
-		}
-
-		if (session.skillsSettings?.enableSkillCommands) {
-			for (const skill of session.skills) {
-				if (skill.hide === true) continue;
-				appendCommand({
-					name: getSkillSlashCommandName(skill),
-					description: skill.description || `Run ${skill.name} skill`,
-					input: { hint: "arguments" },
-				});
-			}
 		}
 
 		for (const command of session.customCommands) {
@@ -1428,6 +1476,19 @@ export class AcpAgent implements Agent {
 				name: command.name,
 				description: command.description,
 			});
+		}
+
+		if (session.skillsSettings?.enableSkillCommands) {
+			for (const skill of session.skills) {
+				if (skill.hide === true) continue;
+				for (const name of getSkillSlashCommandNames(skill)) {
+					appendCommand({
+						name,
+						description: skill.description || `Run ${skill.name} skill`,
+						input: { hint: "arguments" },
+					});
+				}
+			}
 		}
 
 		return commands;

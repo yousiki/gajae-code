@@ -16,6 +16,7 @@ export class AssistantMessageComponent extends Container {
 	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
+	#responseHeader = new Text(theme.bold(theme.fg("statusLineModel", "gajae")), 1, 0);
 
 	constructor(
 		message?: AssistantMessage,
@@ -143,6 +144,7 @@ export class AssistantMessageComponent extends Container {
 
 		if (hasVisibleContent) {
 			this.#contentContainer.addChild(new Spacer(1));
+			this.#contentContainer.addChild(this.#responseHeader);
 		}
 
 		// Render content in order

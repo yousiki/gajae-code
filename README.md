@@ -1,99 +1,73 @@
 # Gajae-Code
 
-Gajae-Code (`gjc`) is a private MVP coding-agent CLI with a deliberately small workflow surface: four bundled skills and four matching agent definitions, all loaded from `.gjc`.
+Gajae-Code (`gjc`) is a minimal coding-agent harness with a deliberately fixed public surface: four workflow skills, four role subagents, and a resilient CLI/runtime around them.
 
-It keeps the core coding-agent strengths—fast file/search tools, LSP-aware edits, native helpers, model-provider flexibility, and a terminal TUI—while removing broad inherited workflow sprawl from the default surface.
+## Story
 
-## Current MVP contract
+I created an earlier OpenAI code harness and `an earlier Anthropic-code harness`. After living with those harnesses, I felt the same thing kept happening: the harness got bloated, but the work still collapsed into one useful loop.
 
-Default public workflow definitions are exactly:
-
-| Skill / agent | Purpose | State/artifacts |
-| --- | --- | --- |
-| `deep-interview` | Socratic requirements interview for ambiguous work. | `.gjc/specs/` |
-| `ralplan` | Consensus planning and approval before mutation. | `.gjc/plans/` |
-| `ultragoal` | Durable goal decomposition and checkpoint ledger. | `.gjc/ultragoal/` |
-| `team` | Tmux-backed parallel execution after approval. | `.gjc/state/team/` |
-
-Default definitions are stored in two places and must stay in sync:
+My claw, Gajae, and I realized the real method was:
 
 ```text
-.gjc/skills/<name>/SKILL.md
-.gjc/agents/<name>.md
-packages/coding-agent/src/defaults/gjc/skills/<name>/SKILL.md
-packages/coding-agent/src/defaults/gjc/agents/<name>.md
+interview to remove ambiguity
+  -> ralplan pre-mortem
+  -> fast parallel execution
+  -> post-mortem with persistent verification evidence and goal tracking
 ```
 
-GJC default skill loading accepts only `.gjc` definitions. Use `.gjc` for project-local runtime state, specs, plans, goals, and team coordination.
+So I made Gajae-Code as a minimal harness that can work with any model. The harness stays fat where resilience matters: CLI, tools, sessions, model routing, artifacts, native helpers, and verification state. The public workflow stays small on purpose.
 
-## Install for local development
+No more default skills. No more default role agents. The product gets better by improving the harness methodology around the same four skills and four subagents.
+
+## Default TUI identity
+
+The default dark TUI identity is the GJC red-claw theme: a red/orange crustacean look for Gajae-Code terminals. Explicit user theme settings still win.
+
+## The four skills
+
+| Skill | Purpose |
+| --- | --- |
+| `deep-interview` | Remove ambiguity before planning. |
+| `ralplan` | Pre-mortem planning and approval before mutation. |
+| `team` | Fast coordinated execution after approval. |
+| `ultragoal` | Persistent goal tracking and verification evidence. |
+
+## The four subagents
+
+| Agent | Purpose |
+| --- | --- |
+| `executor` | Bounded implementation, fixes, and refactors. |
+| `architect` | Read-only architecture and code-review assessment. |
+| `planner` | Read-only sequencing and acceptance criteria. |
+| `critic` | Read-only plan critique and actionability review. |
+
+## Install
 
 ```sh
 bun install
 bun run install:defaults
 ```
 
-`install:defaults` installs the four bundled GJC definitions into the active GJC config directory without overwriting local edits unless forced by the setup command.
-
 ## Run
 
 ```sh
 bun packages/coding-agent/src/cli.ts --help
-bun packages/coding-agent/src/cli.ts setup defaults --check --json
-bun packages/coding-agent/src/cli.ts setup defaults --json
 ```
 
-When installed globally, use `gjc`:
+When installed globally:
 
 ```sh
 gjc --help
-gjc setup defaults --check --json
-gjc setup defaults --json
 ```
 
-## Workflow usage
+## Development
 
-Start with the lightest path that fits the work:
-
-1. Direct edit for clear, low-risk implementation tasks.
-2. `deep-interview` for unclear requirements.
-3. `ralplan` for architectural/test planning and approval.
-4. `ultragoal` for durable multi-goal execution tracking.
-5. `team` for approved parallel execution.
-
-Planning workflows must stop at `pending approval` until execution is explicitly approved.
-
-## Provider base URLs
-
-Built-in provider base URL environment variables override the host only; they do not change the selected API transport.
-
-For example, the built-in OpenAI provider uses the Responses API, so:
-
-```sh
-OPENAI_BASE_URL=https://proxy.example.com/v1
-```
-
-still calls:
+Default workflow definitions live in source, not committed `.gjc` copies:
 
 ```text
-https://proxy.example.com/v1/responses
+packages/coding-agent/src/defaults/gjc/skills/<name>/SKILL.md
+packages/coding-agent/src/prompts/agents/<role>.md
 ```
-
-If your proxy only supports OpenAI-compatible Chat Completions, configure a custom provider in `models.yml`:
-
-```yaml
-providers:
-  openai-compatible:
-    baseUrl: https://proxy.example.com/v1
-    apiKey: OPENAI_API_KEY
-    api: openai-completions
-    models:
-      - id: gpt-4o
-        name: GPT-4o via proxy
-        api: openai-completions
-```
-
-## Development checks
 
 For workflow-definition or rebrand-surface changes, run:
 
@@ -104,37 +78,7 @@ bun scripts/rebrand-inventory.ts --strict
 bun test packages/coding-agent/test/default-gjc-definitions.test.ts
 ```
 
-For TypeScript/lint verification, run:
-
-```sh
-bun run check:ts
-```
-
-Do not use `tsc` or `npx tsc` directly.
-
-## Repository layout
-
-| Path | Purpose |
-| --- | --- |
-| `packages/coding-agent/` | Main `gjc` CLI and TUI product surface |
-| `packages/ai/` | Multi-provider model client and stream adapters |
-| `packages/agent/` | Agent runtime primitives |
-| `packages/tui/` | Terminal UI rendering |
-| `packages/natives/` | Native bindings package |
-| `packages/stats/` | Local stats dashboard |
-| `packages/utils/` | Shared utilities |
-| `crates/pi-natives/` | Rust native helpers |
-| `.gjc/` | GJC-visible skills, agents, and workflow state |
-
-## CI/CD
-
-The private GitHub repository is configured with:
-
-- default branch: `main`
-- development branch: `dev`
-- CI workflow on `main`, `dev`, and pull requests
-- tag-based release jobs for binaries and npm publishing
-- `main` branch protection requiring `check` and `test`
+For a package-by-package map, see [`docs/codebase-overview.md`](docs/codebase-overview.md).
 
 ## Attribution
 

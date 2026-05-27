@@ -6,14 +6,15 @@
 import { Effort } from "@gajae-code/ai";
 import { parseFrontmatter, prompt } from "@gajae-code/utils";
 import { parseAgentFields } from "../discovery/helpers";
-import designerMd from "../prompts/agents/designer.md" with { type: "text" };
+import architectMd from "../prompts/agents/architect.md" with { type: "text" };
+import criticMd from "../prompts/agents/critic.md" with { type: "text" };
+import executorMd from "../prompts/agents/executor.md" with { type: "text" };
 import exploreMd from "../prompts/agents/explore.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
-import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
-import oracleMd from "../prompts/agents/oracle.md" with { type: "text" };
 
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
+import plannerMd from "../prompts/agents/planner.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 
@@ -43,12 +44,13 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 }
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
+	{ fileName: "executor.md", template: executorMd },
+	{ fileName: "architect.md", template: architectMd },
+	{ fileName: "planner.md", template: plannerMd },
+	{ fileName: "critic.md", template: criticMd },
 	{ fileName: "explore.md", template: exploreMd },
 	{ fileName: "plan.md", template: planMd },
-	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
-	{ fileName: "librarian.md", template: librarianMd },
-	{ fileName: "oracle.md", template: oracleMd },
 	{
 		fileName: "task.md",
 		frontmatter: {
@@ -57,17 +59,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			spawns: "*",
 			model: "pi/task",
 			thinkingLevel: Effort.Medium,
-			hide: true,
-		},
-		template: taskMd,
-	},
-	{
-		fileName: "quick_task.md",
-		frontmatter: {
-			name: "quick_task",
-			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
-			model: "pi/smol",
-			thinkingLevel: Effort.Minimal,
 			hide: true,
 		},
 		template: taskMd,
@@ -135,9 +126,10 @@ export function loadBundledAgents(): AgentDefinition[] {
 	if (bundledAgentsCache !== null) {
 		return bundledAgentsCache;
 	}
-	bundledAgentsCache = EMBEDDED_AGENT_DEFS.map(def =>
+	const utilityAgents = EMBEDDED_AGENT_DEFS.map(def =>
 		parseAgent(`embedded:${def.fileName}`, buildAgentContent(def), "bundled"),
 	);
+	bundledAgentsCache = utilityAgents;
 	return bundledAgentsCache;
 }
 

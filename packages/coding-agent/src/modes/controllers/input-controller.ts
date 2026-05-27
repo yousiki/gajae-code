@@ -3,6 +3,7 @@ import { type AgentMessage, ThinkingLevel } from "@gajae-code/agent-core";
 import type { AutocompleteProvider, SlashCommand } from "@gajae-code/tui";
 import { $env, sanitizeText } from "@gajae-code/utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { buildSkillPromptMessage, parseSkillInvocations } from "../../extensibility/skills";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import { theme } from "../../modes/theme/theme";
@@ -20,12 +21,18 @@ interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
 
+const INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS = 5_000;
+
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
+
+	#abortInteractive(): Promise<void> {
+		return this.ctx.session.abort({ timeoutMs: INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS });
+	}
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
@@ -47,7 +54,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					void this.ctx.session.abort();
+					void this.#abortInteractive();
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -74,7 +81,7 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				void this.ctx.session.abort();
+				void this.#abortInteractive();
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
@@ -192,7 +199,7 @@ export class InputController {
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
 				// Abort current stream and let queued messages be processed
-				await this.ctx.session.abort();
+				await this.#abortInteractive();
 				return;
 			}
 
@@ -408,9 +415,9 @@ export class InputController {
 	}
 
 	/**
-	 * Dispatch a `/skill:<name> [args]` invocation through `promptCustomMessage`
+	 * Dispatch skill slash invocation(s) (`/skill:<name>`) through custom messages
 	 * using the supplied `streamingBehavior`. Returns true if the text was a
-	 * recognised skill command and was dispatched. A failure to load the skill
+	 * recognised skill command chain and was dispatched. A failure to load a skill
 	 * file is surfaced via `showError` but still returns true — the editor was
 	 * already cleared on the success path, so falling through to plain-text
 	 * handling at that point would double-submit. Returns false when the text
@@ -421,48 +428,49 @@ export class InputController {
 	 * ignores it.
 	 */
 	async #invokeSkillCommand(text: string, streamingBehavior: "steer" | "followUp"): Promise<boolean> {
-		if (!text.startsWith("/skill:")) return false;
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillPath = this.ctx.skillCommands?.get(commandName);
-		if (!skillPath) return false;
+		if (!text.startsWith("/")) return false;
+		const invocations = parseSkillInvocations(text, this.ctx.skillCommands ?? new Map());
+		if (invocations.length === 0) return false;
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
 		try {
-			const content = await Bun.file(skillPath).text();
-			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-			const metaLines = [`Skill: ${skillPath}`];
-			if (args) {
-				metaLines.push(`User: ${args}`);
+			for (let index = 0; index < invocations.length; index += 1) {
+				const invocation = invocations[index];
+				if (!invocation) continue;
+				const built = await buildSkillPromptMessage(invocation.skill, invocation.args);
+				const details: SkillPromptDetails = built.details;
+				const displayText = `/${invocation.commandName}${invocation.args ? ` ${invocation.args}` : ""}`;
+				// When the agent is streaming, register a compact slash-form text as
+				// the pending-display twin BEFORE dispatching the CustomMessage. The
+				// returned tag is embedded in details so AgentSession.#handleAgentEvent
+				// can remove the matching display entry when the agent consumes this
+				// message (mirrors the user-message dequeue path).
+				if (this.ctx.session.isStreaming) {
+					const tag = this.ctx.session.enqueueCustomMessageDisplay(displayText, streamingBehavior);
+					details.__pendingDisplayTag = tag;
+				}
+				const isLast = index === invocations.length - 1;
+				if (!this.ctx.session.isStreaming && !isLast) {
+					await this.ctx.session.sendCustomMessage({
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: built.message,
+						display: true,
+						details,
+						attribution: "user",
+					});
+					continue;
+				}
+				await this.ctx.session.promptCustomMessage(
+					{
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						content: built.message,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ streamingBehavior },
+				);
 			}
-			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-			const skillName = commandName.slice("skill:".length);
-			const details: SkillPromptDetails = {
-				name: skillName || commandName,
-				path: skillPath,
-				args: args || undefined,
-				lineCount: body ? body.split("\n").length : 0,
-			};
-			// When the agent is streaming, register the compact slash-form text as
-			// the pending-display twin BEFORE dispatching the CustomMessage. The
-			// returned tag is embedded in details so AgentSession.#handleAgentEvent
-			// can remove the matching display entry when the agent consumes this
-			// message (mirrors the user-message dequeue path).
-			if (this.ctx.session.isStreaming) {
-				const tag = this.ctx.session.enqueueCustomMessageDisplay(text, streamingBehavior);
-				details.__pendingDisplayTag = tag;
-			}
-			await this.ctx.session.promptCustomMessage(
-				{
-					customType: SKILL_PROMPT_MESSAGE_TYPE,
-					content: message,
-					display: true,
-					details,
-					attribution: "user",
-				},
-				{ streamingBehavior },
-			);
 			if (this.ctx.session.isStreaming) {
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
@@ -520,7 +528,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort();
+				void this.#abortInteractive();
 			}
 			return 0;
 		}
@@ -530,7 +538,7 @@ export class InputController {
 		this.ctx.editor.setText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort();
+			void this.#abortInteractive();
 		}
 		return allQueued.length;
 	}
@@ -625,7 +633,7 @@ export class InputController {
 					data: imageData.data,
 					mimeType: imageData.mimeType,
 				});
-				// Insert placeholder at cursor like Claude does
+				// Insert placeholder at cursor like Anthropic model does
 				const imageNum = this.ctx.pendingImages.length;
 				const placeholder = `[Image #${imageNum}]`;
 				this.ctx.editor.insertText(`${placeholder} `);

@@ -129,7 +129,13 @@ function isTermuxSession(): boolean {
 }
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
-const isMultiplexer = Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+function isMultiplexerSession(): boolean {
+	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+}
+
+function useLegacyMultiplexerFullRender(): boolean {
+	return $flag("PI_TUI_LEGACY_MULTIPLEXER_FULL_RENDER");
+}
 
 /**
  * Options for overlay positioning and sizing.
@@ -1023,6 +1029,15 @@ export class TUI extends Container {
 		}
 		return lines;
 	}
+	#truncateLinesToWidth(lines: string[], width: number): string[] {
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (TERMINAL.isImageLine(line) || visibleWidth(line) <= width) continue;
+			const truncated = truncateToWidth(line, width, Ellipsis.Omit);
+			lines[i] = truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		}
+		return lines;
+	}
 
 	#doRender(): void {
 		if (this.#stopped) return;
@@ -1053,6 +1068,7 @@ export class TUI extends Container {
 		// because the marker is embedded mid-line, and before any diff/full render
 		// path so cache comparisons stay byte-accurate.
 		newLines = this.#applyLineResets(newLines);
+		newLines = this.#truncateLinesToWidth(newLines, width);
 
 		// Width changed - need full re-render (line wrapping changes)
 		const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;
@@ -1063,7 +1079,7 @@ export class TUI extends Container {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			// Skip clearing scrollback (3J) in multiplexers — users actively navigate scrollback history
-			if (clear) buffer += isMultiplexer ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
+			if (clear) buffer += isMultiplexerSession() ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				// Lines were pre-terminated/normalized by #applyLineResets; image
@@ -1083,6 +1099,61 @@ export class TUI extends Container {
 				this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
 			}
 			this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
+			this.#previousLines = newLines;
+			this.#previousWidth = width;
+			this.#previousHeight = height;
+		};
+
+		const multiplexerViewportRepaint = (reason: string): void => {
+			this.#fullRedrawCount += 1;
+			const nextViewportTop = Math.max(0, newLines.length - height);
+			const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+			let buffer = "\x1b[?2026h";
+			if (currentScreenRow > 0) {
+				buffer += `\x1b[${currentScreenRow}A`;
+			}
+			buffer += "\r";
+			for (let screenRow = 0; screenRow < height; screenRow++) {
+				if (screenRow > 0) buffer += "\r\n";
+				buffer += "\x1b[2K";
+				const lineIndex = nextViewportTop + screenRow;
+				if (lineIndex >= newLines.length) continue;
+				const line = newLines[lineIndex];
+				const isImage = TERMINAL.isImageLine(line);
+				if (!isImage && visibleWidth(line) > width) {
+					let truncatedLine = truncateToWidth(line, width, Ellipsis.Omit);
+					truncatedLine += truncatedLine.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET;
+					buffer += truncatedLine;
+				} else {
+					buffer += line;
+				}
+			}
+
+			const finalPhysicalRow = nextViewportTop + Math.max(0, height - 1);
+			let cursorSeq = "\x1b[?25l";
+			let cursorToRow = finalPhysicalRow;
+			if (cursorPos && cursorPos.row >= nextViewportTop && cursorPos.row < nextViewportTop + height) {
+				const cursor = this.#cursorControlSequence(cursorPos, newLines.length, finalPhysicalRow);
+				cursorSeq = cursor.seq;
+				cursorToRow = cursor.toRow;
+			}
+			this.#hardwareCursorRow = cursorToRow;
+			buffer += cursorSeq;
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+
+			if ($flag("PI_DEBUG_REDRAW")) {
+				const logPath = getDebugLogPath();
+				const msg = `[${new Date().toISOString()}] multiplexerViewportRepaint: ${reason} (prev=${this.#previousLines.length}, new=${newLines.length}, height=${height}, viewportTop=${nextViewportTop})\n`;
+				fs.appendFileSync(logPath, msg);
+			}
+			// In multiplexers this deliberately prioritizes the live viewport over
+			// historical scrollback repair. After offscreen changes, #previousLines
+			// tracks the desired logical transcript, not every byte emitted into the
+			// multiplexer scrollback.
+			this.#cursorRow = Math.max(0, newLines.length - 1);
+			this.#maxLinesRendered = newLines.length;
+			this.#viewportTopRow = nextViewportTop;
 			this.#previousLines = newLines;
 			this.#previousWidth = width;
 			this.#previousHeight = height;
@@ -1113,10 +1184,16 @@ export class TUI extends Container {
 		// Height changes normally need a full re-render to keep the visible viewport aligned,
 		// but Termux changes height when the software keyboard shows or hides.
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
-		if (heightChanged && !isTermuxSession() && !isMultiplexer) {
-			logRedraw(`terminal height changed (${this.#previousHeight} -> ${height})`);
-			fullRender(true);
-			return;
+		if (heightChanged) {
+			if (isMultiplexerSession() && !useLegacyMultiplexerFullRender()) {
+				multiplexerViewportRepaint(`terminal height changed (${this.#previousHeight} -> ${height})`);
+				return;
+			}
+			if (!isTermuxSession() && !isMultiplexerSession()) {
+				logRedraw(`terminal height changed (${this.#previousHeight} -> ${height})`);
+				fullRender(true);
+				return;
+			}
 		}
 
 		// Content shrunk below the previous render and no overlays - re-render to clear empty rows
@@ -1173,7 +1250,11 @@ export class TUI extends Container {
 				const extraLines = this.#previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
+					if (isMultiplexerSession() && !useLegacyMultiplexerFullRender()) {
+						multiplexerViewportRepaint(`extraLines > height (${extraLines} > ${height})`);
+					} else {
+						fullRender(true);
+					}
 					return;
 				}
 				const clearStartOffset = newLines.length > 0 && extraLines > 0 ? 1 : 0;
@@ -1208,7 +1289,11 @@ export class TUI extends Container {
 		// scrollback ends up consistent with the new transcript state.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
+			if (isMultiplexerSession() && !useLegacyMultiplexerFullRender()) {
+				multiplexerViewportRepaint(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			} else {
+				fullRender(true);
+			}
 			return;
 		}
 

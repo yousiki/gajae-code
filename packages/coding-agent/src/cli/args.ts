@@ -35,12 +35,15 @@ export interface Args {
 	noTools?: boolean;
 	noLsp?: boolean;
 	noPty?: boolean;
+	tmux?: boolean;
+	/** Retained for runtime/test compatibility; extension loading flags are no longer parsed. */
 	hooks?: string[];
 	extensions?: string[];
 	noExtensions?: boolean;
 	pluginDirs?: string[];
 	print?: boolean;
 	export?: string;
+	/** Retained for runtime/test compatibility; arbitrary skill discovery is always disabled. */
 	noSkills?: boolean;
 	skills?: string[];
 	noRules?: boolean;
@@ -48,11 +51,11 @@ export interface Args {
 	noTitle?: boolean;
 	messages: string[];
 	fileArgs: string[];
-	/** Unknown flags (potentially extension flags) - map of flag name to value */
+	/** Retained for test/runtime compatibility; extension-defined flags are no longer parsed. */
 	unknownFlags: Map<string, boolean | string>;
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -123,6 +126,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
+		} else if (arg === "--tmux") {
+			result.tmux = true;
 		} else if (arg === "--tools" && i + 1 < args.length) {
 			const toolNames = args[++i]
 				.split(",")
@@ -155,26 +160,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.print = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
-		} else if (arg === "--hook" && i + 1 < args.length) {
-			result.hooks = result.hooks ?? [];
-			result.hooks.push(args[++i]);
-		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
-			result.extensions = result.extensions ?? [];
-			result.extensions.push(args[++i]);
-		} else if (arg === "--plugin-dir" && i + 1 < args.length) {
-			result.pluginDirs = result.pluginDirs ?? [];
-			result.pluginDirs.push(args[++i]);
-		} else if (arg === "--no-extensions") {
-			result.noExtensions = true;
-		} else if (arg === "--no-skills") {
-			result.noSkills = true;
 		} else if (arg === "--no-rules") {
 			result.noRules = true;
 		} else if (arg === "--no-title") {
 			result.noTitle = true;
-		} else if (arg === "--skills" && i + 1 < args.length) {
-			// Comma-separated glob patterns for skill filtering
-			result.skills = args[++i].split(",").map(s => s.trim());
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
@@ -184,18 +173,6 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
-					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
-				}
-			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}
@@ -254,6 +231,9 @@ export function getExtraHelpText(): string {
   GJC_SLOW_MODEL              - Override slow/reasoning model (see --slow)
   GJC_PLAN_MODEL              - Override planning model (see --plan)
   GJC_NO_PTY                  - Disable PTY-based interactive bash execution
+  --tmux                       - Launch interactive startup inside tmux
+  GJC_LAUNCH_POLICY           - Launch policy for --tmux startup: tmux or direct
+  GJC_TMUX_SESSION            - tmux session name for default interactive startup (default: gajae_code)
 
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}
@@ -274,12 +254,9 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   web_search    - Search the web
   ask           - Ask user questions (interactive mode only)
 
-${chalk.bold("Plugin Options:")}
-  --plugin-dir <path>        Load plugin from directory (repeatable)
-
 ${chalk.bold("Useful Commands:")}
-  gjc agents unpack           - Export bundled subagents to ~/.gjc/agent/agents (default)
-  gjc agents unpack --project - Export bundled subagents to ./.gjc/agents`;
+  ${APP_NAME} --list-models        - List configured provider models
+  ${APP_NAME} --help               - Show this help`;
 }
 
 export function printHelp(): void {

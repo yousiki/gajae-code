@@ -1781,7 +1781,7 @@ var themeWatcher: fs.FSWatcher | undefined;
 var themeReloadTimer: NodeJS.Timeout | undefined;
 var sigwinchHandler: (() => void) | undefined;
 var autoDetectedTheme: boolean = false;
-var autoDarkTheme: string = "dark";
+var autoDarkTheme: string = "red-claw";
 var autoLightTheme: string = "light";
 var onThemeChangeCallback: (() => void) | undefined;
 var themeLoadRequestId: number = 0;
@@ -1801,7 +1801,7 @@ export async function initTheme(
 	lightTheme?: string,
 ): Promise<void> {
 	autoDetectedTheme = true;
-	autoDarkTheme = darkTheme ?? "dark";
+	autoDarkTheme = darkTheme ?? "red-claw";
 	autoLightTheme = lightTheme ?? "light";
 	const name = getDefaultTheme();
 	currentThemeName = name;

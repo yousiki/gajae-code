@@ -29,7 +29,7 @@ import {
 import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@gajae-code/utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
-import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { isSettingsInitialized, type Settings, settings } from "../config/settings";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -37,7 +37,9 @@ import type {
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
+import { resolveSkillSlashCommands, type Skill } from "../extensibility/skills";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
+import { consumePendingGoalModeRequest } from "../gjc-runtime/goal-mode-request";
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
@@ -59,7 +61,6 @@ import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
-import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
@@ -83,7 +84,6 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
-import { MCPCommandController } from "./controllers/runtime-mcp-command-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -112,11 +112,19 @@ import {
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
+const INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS = 5_000;
+
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 	low: "dim",
 	mid: "muted",
 	high: "borderAccent",
 };
+
+function configureDefaultComposerChrome(editor: CustomEditor): void {
+	editor.setBorderVisible(false);
+	editor.setPromptGutter(`${theme.fg("accent", "›")} `);
+	editor.setPaddingX(1);
+}
 
 interface WorkingMessageAccent {
 	main: string;
@@ -279,10 +287,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
-	skillCommands: Map<string, string> = new Map();
+	skillCommands: Map<string, Skill> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 
-	#pendingSlashCommands: SlashCommand[] = [];
+	#baseSlashCommands: SlashCommand[] = [];
+	#baseReservedSlashCommandNames: Set<string> = new Set();
 	#cleanupUnsubscribe?: () => void;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
@@ -355,6 +364,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
+		configureDefaultComposerChrome(this.editor);
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
 		this.editor.onAutocompleteCancel = () => {
@@ -400,19 +410,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			description: `${loaded.command.description} (${loaded.source})`,
 		}));
 
-		// Build skill commands from session.skills (if enabled)
-		const skillCommandList: SlashCommand[] = [];
-		if (settings.get("skills.enableSkillCommands")) {
-			for (const skill of this.session.skills) {
-				if (skill.hide === true) continue;
-				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill.filePath);
-				skillCommandList.push({ name: commandName, description: skill.description });
-			}
-		}
-
-		// Store pending commands for init() where file commands are loaded async
-		this.#pendingSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands, ...skillCommandList];
+		this.#baseSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands];
+		this.#baseReservedSlashCommandNames = new Set(this.#baseSlashCommands.map(command => command.name));
+		this.#rebuildSkillSlashCommands();
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
@@ -432,14 +432,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
 		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", () => this.sessionManager.flush());
-
-		// Wire the report_tool_issue consent gate to the Yes/No dialog popup.
-		// The handler is process-global — subagent tools (which can't reach
-		// `showHookSelector` on their own) resolve through this exact closure.
-		// `Settings.instance` is the disk-backed singleton; passing it explicitly
-		// guarantees the decision persists even when the prompt is triggered
-		// from a subagent whose own `Settings` is an in-memory snapshot.
-		setAutoQaConsentHandler(() => this.#promptAutoQaConsent(), Settings.instance);
 
 		await logger.time(
 			"InteractiveMode.init:slashCommands",
@@ -508,7 +500,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
-		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
+		this.ui.addChild(this.statusLine); // Main status rail + hook statuses; composer stays borderless.
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.hookWidgetContainerBelow);
@@ -570,6 +562,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Set up theme file watcher
 		onThemeChange(() => {
 			clearRenderCache();
+			configureDefaultComposerChrome(this.editor);
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -596,17 +589,36 @@ export class InteractiveMode implements InteractiveModeContext {
 	async refreshSlashCommandState(cwd?: string): Promise<void> {
 		const basePath = cwd ?? this.sessionManager.getCwd();
 		const fileCommands = await loadSlashCommands({ cwd: basePath });
-		this.fileSlashCommands = new Set(fileCommands.map(cmd => cmd.name));
+		const fileCommandNames = new Set(fileCommands.map(cmd => cmd.name));
+		this.fileSlashCommands = fileCommandNames;
 		const fileSlashCommands: SlashCommand[] = fileCommands.map(cmd => ({
 			name: cmd.name,
 			description: cmd.description,
 		}));
+		const skillCommands = this.#rebuildSkillSlashCommands(fileCommandNames);
+		const slashCommands = [...this.#baseSlashCommands, ...skillCommands];
 		const autocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands],
+			[...slashCommands, ...fileSlashCommands],
 			basePath,
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	#rebuildSkillSlashCommands(fileCommandNames: ReadonlySet<string> = new Set()): SlashCommand[] {
+		this.skillCommands.clear();
+		if (!settings.get("skills.enableSkillCommands")) {
+			return [];
+		}
+		const reservedDirectCommandNames = new Set([
+			...this.#baseReservedSlashCommandNames,
+			...Array.from(fileCommandNames),
+		]);
+		const resolvedCommands = resolveSkillSlashCommands(this.session.skills, reservedDirectCommandNames);
+		for (const command of resolvedCommands) {
+			this.skillCommands.set(command.name, command.skill);
+		}
+		return resolvedCommands.map(command => ({ name: command.name, description: command.description }));
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {
@@ -931,9 +943,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	updateEditorTopBorder(): void {
-		const availableWidth = this.editor.getTopBorderAvailableWidth(this.ui.terminal.columns);
-		const topBorder = this.statusLine.getTopBorder(availableWidth);
-		this.editor.setTopBorder(topBorder);
+		// The opencode-style composer is intentionally borderless. Keep status-line
+		// rendering out of the input area so the prompt remains a simple gutter + body.
+		this.editor.setTopBorder(undefined);
 	}
 
 	rebuildChatFromMessages(): void {
@@ -1113,6 +1125,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				await this.#exitGoalMode({ reason: "dropped", silent: true });
 				return;
 			}
+			if (event.state?.enabled === true && !this.#goalModePreviousTools) {
+				this.#goalModePreviousTools = this.session.getActiveToolNames().filter(name => name !== "goal");
+			}
 			this.goalModeEnabled = event.state?.enabled === true;
 			this.goalModePaused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
 			if (!event.state?.enabled) {
@@ -1208,6 +1223,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				await this.session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
 			}
 			this.#updateGoalModeStatus();
+			return;
+		}
+		const pendingGoal = goalEnabled ? await consumePendingGoalModeRequest(this.sessionManager.getCwd()) : null;
+		if (pendingGoal) {
+			await this.#enterGoalMode({ objective: pendingGoal.objective, silent: true });
+			this.#scheduleGoalContinuation();
 			return;
 		}
 		if (!this.session.settings.get("plan.enabled")) {
@@ -1319,7 +1340,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const prev = this.#planModePreviousModelState;
 			if (modelsAreEqual(this.session.model, prev.model)) {
 				// Same model — only thinking level may differ. Avoid setModelTemporary()
-				// which would reset provider-side sessions (openai-responses/Codex) and
+				// which would reset provider-side sessions (openai-responses/OpenAI code backend) and
 				// break conversation continuity.
 				this.session.setThinkingLevel(prev.thinkingLevel);
 			} else if (this.session.isStreaming) {
@@ -1918,7 +1939,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// plan) while the popup is showing. The event listener fires asynchronously
 		// (agent's #emit is fire-and-forget), so without this the model sees
 		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
-		await this.session.abort();
+		await this.session.abort({ timeoutMs: INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS });
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
@@ -1966,62 +1987,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	/**
-	 * Pool of consent-prompt variants. Each entry is `[headline, reassurance]`;
-	 * the second line always promises the same scope (tool name + confusion
-	 * details, never personal data) so users learn what they're consenting to
-	 * even as the top line rotates.
-	 *
-	 * Kept in-module rather than i18n'd because the whole charm is the tone
-	 * — translations would need to preserve it deliberately, not auto-render.
-	 */
-	static #AUTOQA_CONSENT_PROMPTS: ReadonlyArray<readonly [string, string]> = [
-		[
-			"😤 Your agent is fuming about a tool.",
-			"Wanna let it vent to the devs? Just the tool name + what set it off, nothing personal.",
-		],
-		[
-			"😵‍💫 Your agent is having an existential crisis over a tool.",
-			"Forward the dread to the devs? Tool + what broke its little mind, no personal info.",
-		],
-		[
-			"😭 Your agent wants to cry about a misbehaving tool.",
-			"Let it cry to the devs? Tool + the tears, never anything personal.",
-		],
-		[
-			"🤬 Your agent is BIG MAD at one of the tools.",
-			"Pass the rant along? Just the tool name and what enraged it, nothing personal.",
-		],
-		[
-			"🫠 Your agent is melting down over a tool.",
-			"Mop up by alerting the devs? Tool + what melted it, no personal info.",
-		],
-		[
-			"🤯 Your agent's brain broke at a tool's nonsense.",
-			"Ship the pieces to the devs? Tool name + the confusion, never anything personal.",
-		],
-		[
-			"😩 Your agent is begging to file a complaint about a tool.",
-			"Hand it the form? Tool + what wronged it, nothing personal.",
-		],
-		[
-			"🥲 Your agent put on a brave face but a tool did it dirty.",
-			"Let it tell the devs the truth? Tool name + the dirt, no personal info.",
-		],
-	];
-
-	/**
-	 * Show the report_tool_issue consent popup and return the user's decision.
-	 * Invoked by the process-global consent handler the tool dispatches to;
-	 * subagent invocations bubble up here through the shared module state.
-	 */
-	async #promptAutoQaConsent(): Promise<boolean | null> {
-		const pool = InteractiveMode.#AUTOQA_CONSENT_PROMPTS;
-		const [headline, body] = pool[Math.floor(Math.random() * pool.length)];
-		const choice = await this.showHookSelector(`${headline}\n${body}`, ["Yes", "No"]);
-		return choice === "Yes";
-	}
-
 	stop(): void {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -2052,9 +2017,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
 		}
-		// Clear the process-global consent handler so it doesn't outlive this
-		// InteractiveMode instance (e.g. test harnesses, headless re-init).
-		setAutoQaConsentHandler(null, null);
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;
@@ -2132,6 +2094,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? factory(this.ui, getEditorTheme(), this.keybindings)
 			: new CustomEditor(getEditorTheme());
 
+		configureDefaultComposerChrome(nextEditor);
 		nextEditor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		nextEditor.setAutocompleteMaxVisible(this.settings.get("autocompleteMaxVisible"));
 		nextEditor.onAutocompleteCancel = () => {
@@ -2532,9 +2495,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
 	}
 
-	async handleMCPCommand(text: string): Promise<void> {
-		const controller = new MCPCommandController(this);
-		await controller.handle(text);
+	async handleMCPCommand(_text: string): Promise<void> {
+		this.showWarning(`MCP commands are not available in ${APP_NAME}.`);
 	}
 
 	async handleSSHCommand(text: string): Promise<void> {
@@ -2580,6 +2542,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		this.#selectorController.showModelSelector(options);
+	}
+
+	showProviderOnboarding(): void {
+		this.#selectorController.showProviderOnboarding();
 	}
 
 	showPluginSelector(mode?: "install" | "uninstall"): void {

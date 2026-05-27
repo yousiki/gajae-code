@@ -16,7 +16,7 @@
  */
 import type { SkillsSettings } from "../../config/settings";
 import type { CustomCommandSource, LoadedCustomCommand } from "../custom-commands";
-import { getSkillSlashCommandName, type Skill } from "../skills";
+import { getSkillSlashCommandNames, type Skill } from "../skills";
 import type { SlashCommandInfo, SlashCommandLocation } from "../slash-commands";
 import type { ExtensionRunner } from "./runner";
 
@@ -54,12 +54,14 @@ export function getSessionSlashCommands(session: CommandsCapableSession): SlashC
 	if (session.skillsSettings?.enableSkillCommands) {
 		for (const skill of session.skills) {
 			if (skill.hide === true) continue;
-			out.push({
-				name: getSkillSlashCommandName(skill),
-				description: skill.description || undefined,
-				source: "skill",
-				path: skill.filePath,
-			});
+			for (const name of getSkillSlashCommandNames(skill)) {
+				out.push({
+					name,
+					description: skill.description || undefined,
+					source: "skill",
+					path: skill.filePath,
+				});
+			}
 		}
 	}
 

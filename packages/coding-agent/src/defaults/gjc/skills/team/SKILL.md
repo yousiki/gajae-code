@@ -1,20 +1,20 @@
 ---
 name: team
-description: N coordinated agents on shared task list using tmux-based orchestration
+description: Multi-worker GJC tmux team orchestration
 
 source: "forked from upstream team skill and rebranded for GJC"
 ---
 
 # Team Skill
 
-`$team` is the tmux-based parallel execution mode for GJC. It starts real worker GJC worker CLI sessions in split panes and coordinates them through `.gjc/state/team/...` files plus CLI team interop (`gjc team api ...`) and state files.
+`$team` is the tmux-based multi-worker execution mode for GJC. It starts real GJC worker CLI sessions by splitting the current tmux leader window and coordinates them through `.gjc/state/team/...` files plus CLI team interop (`gjc team api ...`) and state files.
 
 This skill is operationally sensitive. Treat it as an operator workflow, not a generic prompt pattern. In GJC App or plain outside-tmux sessions, do not present `$team` / `gjc team` as directly available; launch GJC CLI from shell first, or stay on the nearest app-safe surface until the user explicitly wants the tmux runtime.
 
 ## Team vs Native Subagents
 
 - Use **GJC native subagents** for bounded, in-session parallelism where one leader thread can fan out a few independent subtasks and wait for them directly.
-- Use **`gjc team`** when you need durable tmux workers, shared task state, mailbox/dispatch coordination, worktrees, explicit lifecycle control, or long-running parallel execution that must survive beyond one local reasoning burst.
+- Use **`gjc team`** when you need durable visible tmux workers, shared task state, worker mailbox files, worktrees, explicit lifecycle control, or long-running execution that must survive beyond one local reasoning burst.
 - Native subagents can complement team execution, but they do **not** replace the tmux team runtime's stateful coordination contract.
 
 ## What This Skill Must Do
@@ -29,7 +29,7 @@ When user triggers `$team`, the agent must:
 2. Avoid replacing the flow with in-process `spawn_agent` fanout
 3. Verify startup and surface concrete state/pane evidence
 4. If active team mode state is missing, initialize/sync it from canonical team runtime state before proceeding
-5. Keep team state alive until workers are terminal (unless explicit abort)
+5. Keep team state alive until the worker is terminal (unless explicit abort)
 6. Handle cleanup and stale-pane recovery when needed
 
 If `gjc team` is unavailable, stop with a hard error.
@@ -51,35 +51,28 @@ gjc team "ship end-to-end fix with verification"
 ### Team-first launch contract
 
 `gjc team ...` is now the canonical launch path for coordinated execution.
-Team mode should carry its own parallel delivery + verification lanes without
-requiring a separate linked execution loop up front.
+Team mode should carry visible worker delivery/verification lanes without
+requiring a separate linked execution loop up front. GJC team supports current-window multi-worker mode; explicit `N:agent-type` values select worker count and shared role.
 
-- **Canonical launch:** use plain `gjc team ...` / `$team ...` for coordinated workers.
+- **Canonical launch:** use plain `gjc team ...` / `$team ...` for the coordinated worker.
 - **Verification ownership:** keep one lane focused on tests, regression coverage, and evidence before shutdown.
 - **Escalation:** use a new explicit follow-up task only when later manual work still needs a persistent single-owner fix/verification loop.
 - **Deprecation:** nested team execution commands have been removed. Use plain `gjc team ...` for coordinated execution.
 
 ### Team + Ultragoal bridge
 
-Use `$ultragoal` for durable leader-owned goal/ledger tracking and `$team` for parallel execution lanes. When Team is launched with an active `.gjc/ultragoal/goals.json`, worker inboxes/status may include leader-owned Ultragoal context: `.gjc/ultragoal/goals.json`, `.gjc/ultragoal/ledger.jsonl`, the active goal id, Codex goal mode, and the `fresh_leader_get_goal_required` checkpoint policy.
+Use `$ultragoal` for durable leader-owned goal/ledger tracking and `$team` for parallel visible tmux execution lanes. When Team is launched with an active `.gjc/ultragoal/goals.json`, worker task/status context may include leader-owned Ultragoal context: `.gjc/ultragoal/goals.json`, `.gjc/ultragoal/ledger.jsonl`, the active goal id, GJC goal mode, and the `fresh_leader_get_goal_required` checkpoint policy.
 
-Workers provide task status and verification evidence only. They do not own Ultragoal goal state, create worker ledgers, mutate `.gjc/ultragoal`, auto-launch Team from Ultragoal, or perform hidden Codex goal mutation. The leader uses terminal Team evidence plus a fresh `get_goal` snapshot to run `gjc ultragoal checkpoint --goal-id <id> --status complete --evidence "<team evidence mentioning .gjc/ultragoal and <id>>" --codex-goal-json <fresh-get_goal-json-or-path>`.
+Workers provide task status and verification evidence only. They do not own Ultragoal goal state, create worker ledgers, mutate `.gjc/ultragoal`, auto-launch Team from Ultragoal, or perform hidden GJC goal mutation. The leader uses terminal Team evidence plus a fresh `get_goal` snapshot to run `gjc ultragoal checkpoint --goal-id <id> --status complete --evidence "<team evidence mentioning .gjc/ultragoal and <id>>" --gjc-goal-json <fresh-get_goal-json-or-path>`.
 
-### alternate worker CLIs (v0.6.0+)
+### Worker command override
 
-Important: `N:agent-type` (for example `2:executor`) selects the **worker role prompt**, not the worker CLI.
+Important: `N:agent-type` (for example `3:executor`) selects the worker count and role prompt. Plain `gjc team "task"` defaults to 3 executor workers; `gjc team 1:executor "task"` is the explicit single-worker form.
 
-To launch alternate worker CLIs, use the team worker CLI env vars:
+To launch the worker with a specific GJC-compatible command, use `GJC_TEAM_WORKER_COMMAND`:
 
 ```bash
-# Force all teammates to alternate worker CLI
-GJC_TEAM_WORKER_CLI=gjc gjc team 2:executor "update docs and report"
-
-# Mixed team (worker 1 = Codex, worker 2 = GJC)
-GJC_TEAM_WORKER_CLI_MAP=gjc,gjc gjc team 2:executor "split doc/code tasks"
-
-# Auto mode: GJC is selected when worker launch args/model contains 'gjc'
-GJC_TEAM_WORKER_CLI=auto GJC_TEAM_WORKER_LAUNCH_ARGS="--model gjc-..." gjc team 2:executor "run mixed validation"
+GJC_TEAM_WORKER_COMMAND="bun packages/coding-agent/src/cli.ts" gjc team executor "update docs and report"
 ```
 
 ## Preconditions
@@ -116,7 +109,7 @@ Before launching `gjc team`, require a grounded context snapshot:
 4. If ambiguity remains high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` before team launch.
 5. If current correctness depends on official docs, version-aware framework guidance, best practices, or external dependency behavior, auto-delegate `researcher` as an evidence lane before or alongside worker launch instead of relying on repo-local recall alone.
 
-Do not start worker panes until this gate is satisfied; if forced to proceed quickly, state explicit scope/risk limitations in the launch report.
+Do not start the worker pane until this gate is satisfied; if forced to proceed quickly, state explicit scope/risk limitations in the launch report.
 
 For simple read-only brownfield lookups during intake, follow active session guidance: when `USE_GJC_EXPLORE_CMD` is enabled, prefer `gjc explore` with narrow, concrete prompts; otherwise use the richer normal explore path and fall back normally if `gjc explore` is unavailable.
 
@@ -125,132 +118,64 @@ For simple read-only brownfield lookups during intake, follow active session gui
 When `$team` is used as a follow-up mode from ralplan, carry forward the approved plan's explicit **available-agent-types roster** and convert it into concrete staffing guidance before launch:
 
 - keep worker-role choices inside the known roster
-- state the recommended headcount and role counts
+- state that GJC team launches the requested worker count and role allocation
 - state the suggested reasoning level for each lane when available
 - explain why each lane exists (delivery, verification, specialist support)
-- include an explicit launch hint (`gjc team N "<task>"` / `$team N "<task>"`) for the coordinated team run; mention `$ultragoal` as the default durable follow-up/ledger path; mention a later separate Single-owner execution follow-up only when explicitly requested or genuinely needed as a fallback
+- include an explicit launch hint (`gjc team "<task>"` / `$team "<task>"`) for the coordinated worker run; mention `$ultragoal` as the default durable follow-up/ledger path; mention a later separate Single-owner execution follow-up only when explicitly requested or genuinely needed as a fallback
 - if the ideal role is unavailable, choose the closest role from the roster and say so
 
 ## Current Runtime Behavior (As Implemented)
 
 `gjc team` currently performs:
 
-1. Parse args (`N`, `agent-type`, task)
-2. Sanitize team name from task text
+1. Parse args (`N`, `agent-type`, task), default to 3 workers, and cap workers at 20.
+2. Non-dry-run: detect the current tmux leader context with `display-message -p "#S:#I #{pane_id}"` before creating state or worktrees.
 3. Initialize team state:
    - `.gjc/state/team/<team>/config.json`
    - `.gjc/state/team/<team>/manifest.v2.json`
-   - `.gjc/state/team/<team>/tasks/task-<id>.json`
-4. Compose team-scoped worker instructions file at:
-   - `.gjc/state/team/<team>/worker-agents.md`
-   - Uses project `AGENTS.md` content (if present) + worker overlay, without mutating project `AGENTS.md`
-5. Resolve canonical shared state root from leader cwd (`<leader-cwd>/.gjc/state`)
-6. Split current tmux window into worker panes
-7. Launch workers with:
-   - `GJC_TEAM_WORKER=<team>/worker-<n>`
-   - `GJC_TEAM_STATE_ROOT=<leader-cwd>/.gjc/state`
-   - `GJC_TEAM_LEADER_CWD=<leader-cwd>`
-   - worker CLI selected by `GJC_TEAM_WORKER_CLI` / `GJC_TEAM_WORKER_CLI_MAP` (GJC-compatible worker CLI)
-   - optional worktree metadata envs when `--worktree` is used
-7. Wait for worker readiness (`capture-pane` polling)
-8. Write per-worker `inbox.md` and trigger via `tmux send-keys`
-9. Return control to leader; follow-up uses `status` / `resume` / `shutdown`
-
-If coarse active team mode state is missing while canonical team runtime state exists, restore/sync the active team mode state before relying on hook/mode-aware behavior.
+   - `.gjc/state/team/<team>/tasks/task-1.json`
+   - `.gjc/state/team/<team>/mailbox/worker-1.json`
+4. Resolve the worker command from `GJC_TEAM_WORKER_COMMAND` or the active `gjc` entrypoint.
+5. Split the current tmux window like GJC team: worker 1 is split horizontally to the right of the leader, workers 2..N are vertically stacked in the right column, then `select-layout main-vertical` and `main-pane-width` keep leader-left/worker-right at roughly 50/50.
+6. Launch the worker with:
+   - `GJC_TEAM_NAME=<team>`
+   - `GJC_TEAM_WORKER_ID=worker-1`
+   - `GJC_TEAM_STATE_ROOT=<leader-cwd>/.gjc/state/team`
+   - optional `GJC_TEAM_WORKTREE_PATH=<path>` when worktree mode is active
+7. Store pane/target evidence in config/manifest/snapshot: `tmux_session`, `tmux_session_name`, `tmux_target`, leader pane id, and worker pane id.
+8. Return control to the leader; follow-up uses `status`, `resume`, `shutdown`, and `gjc team api`.
 
 Important:
 
-- Leader remains in existing pane
-- Worker panes are independent full GJC worker CLI sessions
-- Workers may run in separate git worktrees (`gjc team --worktree[=<name>]`) while sharing one team state root
-- Worker ACKs go to `mailbox/leader-fixed.json`
-- Notify hook updates worker heartbeat and sends lifecycle-driven leader nudges (for example resolved native worker Stop/all-idle or stale-leader evidence) during active team mode; deprecated worker stall/progress heuristics are not operator-facing guidance.
-- Submit routing uses this CLI resolution order per worker trigger:
-  1) explicit worker CLI provided by runtime state (persisted on worker identity/config),
-  2) `GJC_TEAM_WORKER_CLI_MAP` entry for that worker index,
-  3) fallback `GJC_TEAM_WORKER_CLI` / auto detection.
-- Mixed CLI-map teams are supported for both startup and trigger submit behavior.
-- Trigger submit differs by CLI:
-  - Codex may use queue-first `Tab` on busy panes (strategy-dependent).
-  - GJC always uses direct Enter-only (`C-m`) rounds (never queue-first `Tab`).
-
-### Team worker model + thinking resolution (current contract)
-
-Team mode resolves worker **model flags** from one shared launch-arg set (not per-worker model selection).
-
-Model precedence (highest to lowest):
-1. Explicit worker model in `GJC_TEAM_WORKER_LAUNCH_ARGS`
-2. Inherited leader `--model` flag
-3. Low-complexity default from `GJC_DEFAULT_SPARK_MODEL` (legacy alias: `GJC_SPARK_MODEL`) when 1+2 are absent and team `agentType` is low-complexity
-
-Default-model rule:
-- Do **not** assume a frontier or spark model from recency or model-family heuristics.
-- Use `GJC_DEFAULT_FRONTIER_MODEL` for frontier-default guidance.
-- Use `GJC_DEFAULT_SPARK_MODEL` for spark/low-complexity worker-default guidance.
-
-Thinking-level rule (critical):
-- **No model-name heuristic mapping.**
-- Team runtime must **not** infer `model_reasoning_effort` from model-name substrings (e.g., `spark`, `high-capability`, `mini`).
-- When the leader assigns teammate roles/tasks, GJC allocates **per-worker reasoning effort dynamically** from the resolved worker role and `agentReasoning` overrides (`low`, `medium`, `high`, `xhigh`).
-- Explicit launch args still win: if `GJC_TEAM_WORKER_LAUNCH_ARGS` already includes `-c model_reasoning_effort=...`, that explicit value overrides dynamic allocation for every worker.
-
-Normalization requirements:
-- Parse both `--model <value>` and `--model=<value>`
-- Remove duplicate/conflicting model flags
-- Emit exactly one final canonical flag: `--model <value>`
-- Preserve unrelated args in worker launch config
-- If explicit reasoning exists, preserve canonical `-c model_reasoning_effort="<level>"`; otherwise inject the worker role's default or `agentReasoning`-overridden reasoning level
+- Leader remains in the existing left pane.
+- Worker panes are independent full GJC worker CLI sessions on the right side of a leader-left/worker-right split.
+- The worker may run in a dedicated git worktree (`gjc team --worktree[=<name>]`) while sharing the team state root.
+- `shutdown` kills only the recorded worker pane after confirming it still belongs to the stored tmux target and is not the leader pane. It never kills the tmux session.
 
 ## Required Lifecycle (Operator Contract)
 
 Follow this exact lifecycle when running `$team`:
 
-1. Start team and verify startup evidence (team line, tmux target, panes, ACK mailbox)
-2. Monitor task and worker progress with runtime/state tools first (`gjc team status <team>`, `gjc team resume <team>`, mailbox/state files)
+1. Start team and verify startup evidence (team line, tmux target, worker pane id, state dir).
+2. Monitor task progress with runtime/state tools first (`gjc team status <team>`, `gjc team resume <team>`, task files).
 3. Wait for terminal task state before shutdown:
    - `pending=0`
    - `in_progress=0`
    - `failed=0` (or explicitly acknowledged failure path)
-4. Only then run `gjc team shutdown <team>`
-5. Verify shutdown evidence and state cleanup
+4. Only then run `gjc team shutdown <team>`.
+5. Verify shutdown evidence and preserved state (`phase=complete`, worker status `stopped`).
 
-Do not run `shutdown` while workers are actively writing updates unless user explicitly requested abort/cancel.
-Do not treat ad-hoc pane typing as primary control flow when runtime/state evidence is available.
+Do not run `shutdown` while the worker is actively writing updates unless user explicitly requested abort/cancel. Do not treat ad-hoc pane typing as primary control flow when runtime/state evidence is available.
 
 ### Active leader monitoring rule
 
-While a team is **ON/running**, the leader must not go blind. Keep checking live team state until terminal completion.
+While a team is running, keep checking live team state until terminal completion.
 
 Minimum acceptable loop:
 
 ```bash
 sleep 30 && gjc team status <team-name>
 ```
-
-Repeat that check while the team stays active, or use `gjc team await <team-name> --timeout-ms 30000 --json` when event-driven waiting is a better fit.
-
-If the leader gets a stale, lifecycle, or all-idle nudge, immediately run `gjc team status <team-name>` before taking any manual intervention. Deprecated worker stall/progress nudges should not be treated as an active runtime contract.
-
-### Deprecated worker stall/progress knobs
-
-`GJC_TEAM_PROGRESS_STALL_MS` and `GJC_TEAM_WORKER_TURN_STALL_MS` are legacy compatibility/test-only names for the retired worker stall/progress nudge path. Do not recommend them as operator tuning knobs for active team runs; resolved native worker Stop, all-idle, mailbox, and stale-leader evidence are the supported leader wakeup signals.
-
-## Message Dispatch Policy (CLI-first, state-first)
-
-To avoid brittle behavior, **message/task delivery must not be driven by ad-hoc tmux typing**.
-
-Required default path:
-
-1. Use `gjc team ...` runtime lifecycle commands for orchestration.
-2. Use `gjc team api ... --json` for mailbox/task mutations.
-3. Verify delivery via mailbox/state evidence (`mailbox/*.json`, task status, `gjc team status`).
-
-Strict rules:
-
-- **MUST NOT** use direct `tmux send-keys` as the primary mechanism to deliver instructions/messages.
-- **MUST NOT** spam Enter/trigger keys without first checking runtime/state evidence.
-- **MUST** prefer durable state writes + runtime dispatch (`dispatch/requests.json`, mailbox, inbox).
-- Direct tmux interaction is **fallback-only** and only after failure checks (for example `worker_notify_failed:<worker>`) or explicit user request (for example “press enter”).
 
 ## Operational Commands
 
@@ -262,188 +187,100 @@ gjc team shutdown <team-name>
 
 Semantics:
 
-- `status`: reads team snapshot (task counts, dead/non-reporting workers)
-- `resume`: reconnects to live team session if present
-- `shutdown`: graceful shutdown request, then cleanup (deletes `.gjc/state/team/<team>`)
+- `status`: reads team snapshot (task counts, worker state, tmux target/pane evidence).
+- `resume`: reads the same live team snapshot for reconnect/inspection flows.
+- `shutdown`: kills the recorded worker pane when it still belongs to the stored tmux target, removes clean created worktrees, marks worker stopped, and marks phase complete. It preserves `.gjc/state/team/<team>` as evidence.
 
 ## Data Plane and Control Plane
 
 ### Control Plane
 
-- tmux panes/processes (`GJC_TEAM_WORKER` per worker)
-- leader notifications via `tmux display-message`
+- Current tmux leader window and one or more worker panes.
+- `gjc team` lifecycle commands.
+- `gjc team api claim-task` and `gjc team api transition-task-status`.
 
 ### Data Plane
 
-- `.gjc/state/team/<team>/...` files
-- Team mailbox files:
-- `.gjc/state/team/<team>/mailbox/leader-fixed.json`
-- `.gjc/state/team/<team>/mailbox/worker-<n>.json`
-- `.gjc/state/team/<team>/dispatch/requests.json` (durable dispatch queue; hook-preferred, fallback-aware)
-
-### Key Files
-
 - `.gjc/state/team/<team>/config.json`
 - `.gjc/state/team/<team>/manifest.v2.json`
-- `.gjc/state/team/<team>/tasks/task-<id>.json`
-- `.gjc/state/team/<team>/workers/worker-<n>/identity.json`
-- `.gjc/state/team/<team>/workers/worker-<n>/inbox.md`
-- `.gjc/state/team/<team>/workers/worker-<n>/heartbeat.json`
-- `.gjc/state/team/<team>/workers/worker-<n>/status.json`
-- `.gjc/state/team-leader-nudge.json`
-
+- `.gjc/state/team/<team>/phase.json`
+- `.gjc/state/team/<team>/events.jsonl`
+- `.gjc/state/team/<team>/telemetry.jsonl`
+- `.gjc/state/team/<team>/tasks/task-1.json`
+- `.gjc/state/team/<team>/mailbox/worker-1.json`
 
 ## Team Mutation Interop (CLI-first)
 
-Use `gjc team api` for machine-readable mutation/reads instead of legacy `team_*` runtime integration tools.
+Use `gjc team api` for machine-readable task lifecycle operations.
 
 ```bash
-gjc team api <operation> --input '{"team_name":"my-team",...}' --json
+gjc team api claim-task --input '{"team_name":"my-team","worker_id":"worker-1"}' --json
+gjc team api transition-task-status --input '{"team_name":"my-team","task_id":"task-1","to":"completed","claim_token":"<claim-token>"}' --json
 ```
 
-Examples:
+Canonical worker lifecycle operations:
 
-```bash
-gjc team api send-message --input '{"team_name":"my-team","from_worker":"worker-1","to_worker":"leader-fixed","body":"ACK"}' --json
-gjc team api claim-task --input '{"team_name":"my-team","task_id":"1","worker":"worker-1"}' --json
-gjc team api transition-task-status --input '{"team_name":"my-team","task_id":"1","from":"in_progress","to":"completed","claim_token":"<token>"}' --json
-```
+- `claim-task`
+- `transition-task-status`
+- `release-task-claim`
 
-`--json` responses include stable metadata for automation:
-- `schema_version`
-- `timestamp`
-- `command`
-- `ok`
-- `operation`
-- `data` or `error`
+GJC-team interop operations are also available for mailbox, worker heartbeat/status, events, monitor snapshots, approvals, and shutdown request/ack flows; run `gjc team api --help` for the full operation list.
 
-## Team + Worker Protocol Notes
+Worker protocol:
 
-Leader-to-worker:
-
-- Write full assignment to worker `inbox.md`
-- Send short trigger (<200 chars) with `tmux send-keys`
-
-Worker-to-leader:
-
-- Send ACK to `leader-fixed` mailbox via `gjc team api send-message --json`
-- Claim/transition/release task lifecycle via `gjc team api <operation> --json`
-
-Worker commit protocol (critical for incremental integration):
-
-- After completing task work and before reporting completion, workers MUST commit:
-  `git add -A && git commit -m "task: <task-subject>"`
-- This ensures changes are available for incremental integration into the leader branch
-- If a worker forgets to commit, the runtime auto-commits as a fallback, but explicit commits are preferred
-
-Task ID rule (critical):
-
-- File path uses `task-<id>.json` (example `task-1.json`)
-- runtime integration API `task_id` uses bare id (example `"1"`, not `"task-1"`)
-- Never instruct workers to read `tasks/{id}.json`
+- Claim pending work with `claim-task`.
+- Transition the task to `completed`, `failed`, or `blocked` with `transition-task-status`.
+- Record implementation/verification evidence in normal task output and state files; do not assume a separate leader confirmation mailbox or queue exists.
 
 ## Environment Knobs
 
 Useful runtime env vars:
 
-- `GJC_TEAM_READY_TIMEOUT_MS`
-  - Worker readiness timeout (default 45000)
-- `GJC_TEAM_SKIP_READY_WAIT=1`
-  - Skip readiness wait (debug only)
-- `GJC_TEAM_AUTO_TRUST=0`
-  - Disable auto-advance for trust prompt (default behavior auto-advances)
-- `GJC_TEAM_AUTO_ACCEPT_BYPASS=0`
-  - Disable GJC bypass-permissions prompt auto-accept (default behavior auto-accepts `2` + Enter)
-- `GJC_TEAM_WORKER_LAUNCH_ARGS`
-  - Extra args passed to worker launch command
-- `GJC_TEAM_WORKER_CLI`
-  - Worker CLI selector: `auto|codex|gjc` (default: `auto`)
-  - `auto` chooses `gjc` when worker `--model` contains `gjc`, otherwise `codex`
-  - In `gjc` mode, workers launch with exactly one `--dangerously-skip-permissions`
-    and ignore explicit model/config/effort launch overrides (uses default `settings.json`)
-- `GJC_TEAM_WORKER_CLI_MAP`
-  - Per-worker CLI selector (comma-separated `auto|codex|gjc`)
-  - Length must be `1` (broadcast) or exactly the team worker count
-  - Example: `GJC_TEAM_WORKER_CLI_MAP=codex,gjc,gjc,gjc`
-  - When present, overrides `GJC_TEAM_WORKER_CLI`
-- `GJC_TEAM_AUTO_INTERRUPT_RETRY`
-  - Trigger submit fallback (default: enabled)
-  - `0` disables adaptive queue->resend escalation
-- `GJC_TEAM_LEADER_NUDGE_MS`
-  - Leader nudge interval in ms (default 120000)
-- `GJC_TEAM_STRICT_SUBMIT=1`
-  - Force strict send-keys submit failure behavior
+- `GJC_TEAM_TMUX_COMMAND`
+  - tmux binary/command override (default `tmux`)
+- `GJC_TEAM_WORKER_COMMAND`
+  - worker command override (default resolves to active GJC entrypoint or `gjc`)
+- `GJC_TEAM_STATE_ROOT`
+  - team state root override (default `<cwd>/.gjc/state/team`)
 
 ## Failure Modes and Diagnosis
 
 Operator note (important for GJC panes):
 - Manual Enter injection (`tmux send-keys ... C-m`) can appear to "do nothing" when a worker is actively processing; Enter may be queued by the pane/task flow.
-- This is not necessarily a runtime bug. Confirm worker/team state before diagnosing dispatch failure.
+- This is not necessarily a runtime bug. Confirm worker/team state before diagnosing worker failure.
 - Avoid repeated blind Enter spam; it can create noisy duplicate submits once the pane becomes idle.
+
+### Common failures
+
+- **Outside tmux:** non-dry-run launch fails before team state or worktrees are created. Start `gjc team` from an attached tmux leader pane.
+- **Split failure:** startup records a failed phase if state was already initialized, rolls back created worktrees, and never kills the leader tmux session.
+- **Worker API ENOENT:** team state is missing or `GJC_TEAM_STATE_ROOT` points somewhere else. Check `.gjc/state/team/<team>/` before assuming worker failure.
+- **Stale pane on shutdown:** shutdown only kills a recorded worker pane when it still belongs to the stored `tmux_target` and is not the leader pane. Stale panes outside that target require manual inspection.
 
 ### Safe Manual Intervention (last resort)
 
-Use only after checking `gjc team status <team>` and mailbox/state evidence:
+Use only after checking `gjc team status <team>` and state evidence:
 
-1. Capture pane tail to confirm current worker state:
+1. Inspect team files:
+   - `.gjc/state/team/<team>/config.json`
+   - `.gjc/state/team/<team>/tasks/task-1.json`
+   - `.gjc/state/team/<team>/mailbox/worker-1.json`
+2. Capture pane tail to confirm current worker state:
    - `tmux capture-pane -t %<worker-pane> -p -S -120`
    - If a larger-tail read or bounded summary would help, prefer explicit opt-in inspection via `gjc sparkshell --tmux-pane %<worker-pane> --tail-lines 400` before improvising extra tmux commands.
-2. If the pane is stuck in an interactive state, safely return to idle prompt first:
+3. If the pane is stuck in an interactive state, safely return to idle prompt first:
    - optional interrupt `C-c` or escape flow (CLI-specific) once, then re-check pane capture
-3. Send one concise trigger (single line) and wait for evidence:
-   - `tmux send-keys -t %<worker-pane> "ack + continue current task; report status" C-m`
-4. Re-check:
-   - pane output via `capture-pane`
-   - mailbox updates (`mailbox/leader-fixed.json` or worker mailbox)
-   - `gjc team status <team>`
-
-### `worker_notify_failed:<worker>`
-
-Meaning:
-- Leader wrote inbox but trigger submit path failed
-
-Checks:
-
-1. `tmux list-panes -F '#{pane_id}\t#{pane_start_command}'`
-2. `tmux capture-pane -t %<worker-pane> -p -S -120`
-3. Verify worker process alive and not stuck on trust prompt
-4. Rebuild if running repo-local (`npm run build`)
-
-### Team starts but leader gets no ACK
-
-Checks:
-
-1. Worker pane capture shows inbox processing
-2. `.gjc/state/team/<team>/mailbox/leader-fixed.json` exists
-3. Worker skill loaded and `gjc team api send-message --json` called
-4. Task-id mismatch not blocking worker flow
-
-### Worker logs `gjc team api ... ENOENT` (or legacy `team_send_message ENOENT` / `team_update_task ENOENT`)
-
-Meaning:
-- Team state path no longer exists while worker is still running.
-- Typical cause: leader/manual flow ran `gjc team shutdown <team>` (or removed `.gjc/state/team/<team>`) before worker finished.
-
-Checks:
-
-1. `gjc team status <team>` and confirm whether tasks were still `in_progress` when shutdown occurred
-2. Verify whether `.gjc/state/team/<team>/` exists
-3. Inspect worker pane tail for post-shutdown writes
-4. Confirm no external cleanup (`rm -rf .gjc/state/team/<team>`) happened during execution
-
-Prevention:
-
-1. Enforce completion gate (no in-progress tasks) before shutdown
-2. Use `shutdown` only for terminal completion or explicit abort
-3. If aborting, expect late worker writes to fail and treat ENOENT as expected teardown artifact
+4. Send one concise trigger only when runtime/state checks show manual prompt input is needed:
+   - `tmux send-keys -t %<worker-pane> "continue current task; report status" C-m`
+5. Re-check pane output, task state, worker mailbox, and `gjc team status <team>`.
 
 ### Shutdown reports success but stale worker panes remain
 
 Cause:
-- stale pane outside config tracking or previous failed run
+- The stale pane was not the recorded worker pane, no longer belonged to the stored `tmux_target`, or came from a previous failed run.
 
 Fix:
-- manual pane cleanup (see clean-slate commands)
+- Manually inspect panes before cleanup and kill only verified stale worker panes.
 
 ## Clean-Slate Recovery
 
@@ -451,32 +288,33 @@ Run from leader pane:
 
 ```bash
 # 1) Inspect panes
-tmux list-panes -F '#{pane_id}\t#{pane_current_command}\t#{pane_start_command}'
+tmux list-panes -F '#{pane_id}	#{pane_current_command}	#{pane_start_command}'
 
-# 2) Kill stale worker panes only (examples)
+# 2) Kill verified stale worker panes only (examples)
 tmux kill-pane -t %450
 tmux kill-pane -t %451
 
-# 3) Remove stale team state (example)
+# 3) Remove stale team state only after preserving needed evidence (example)
 rm -rf .gjc/state/team/<team-name>
 
 # 4) Retry
-gjc team 1:executor "fresh retry"
+gjc team executor "fresh retry"
 ```
 
 Guidelines:
 
-- Do not kill leader pane
-- Do not kill HUD pane (`gjc hud --watch`) unless intentionally restarting HUD
+- Do not kill the leader pane.
+- Do not kill HUD panes unless intentionally restarting HUD.
+- Prefer `gjc team shutdown <team>` for recorded active workers; use manual pane cleanup only for verified stale panes.
 
 ## Required Reporting During Execution
 
 When operating this skill, provide concrete progress evidence:
 
 1. Team started line (`Team started: <name>`)
-2. tmux target and worker pane presence
-3. leader mailbox ACK path/content check
-4. status/shutdown outcomes
+2. tmux target and worker pane id
+3. task state from `gjc team status <team>` or `.gjc/state/team/<team>/tasks/task-1.json`
+4. shutdown outcome (`phase=complete`, worker status `stopped`) when the run is terminal
 
 Do not claim success without file/pane evidence.
 Do not claim clean completion if shutdown occurred with `in_progress>0`.
@@ -496,12 +334,12 @@ Use the `gjc team ...` CLI as the supported team-launch surface. For automation,
 Two cleanup paths exist and must not be confused:
 
 - `team_cleanup` (**state-server**): Deletes team state **files** on disk (`.gjc/state/team/<team>/`). Use after a team run is fully complete.
-- tmux/session cleanup: Use the documented `gjc team` shutdown / cleanup flow when you need to stop worker panes or clean up an interrupted run.
+- tmux/session cleanup: Use the documented `gjc team` shutdown / cleanup flow when you need to stop the worker pane or clean up an interrupted run.
 
 ### Automation example
 
 ```
-1. gjc team 1:executor "fix bugs"
+1. gjc team executor "fix bugs"
 2. gjc team status <team-name>
 3. gjc team shutdown <team-name>
 4. Clean up the finished team state for <team-name>

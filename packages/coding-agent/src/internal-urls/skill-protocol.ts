@@ -58,6 +58,9 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		const hasRelativePath = urlPath && urlPath !== "/" && urlPath !== "";
 
 		if (hasRelativePath) {
+			if (skill.baseDir.startsWith("embedded:")) {
+				throw new Error(`Embedded skill ${skill.name} does not include relative file assets`);
+			}
 			const relativePath = decodeURIComponent(urlPath.slice(1));
 			validateRelativePath(relativePath);
 			targetPath = path.join(skill.baseDir, relativePath);
@@ -69,6 +72,17 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			}
 		} else {
 			targetPath = skill.filePath;
+		}
+
+		if (typeof skill.content === "string" && !hasRelativePath) {
+			return {
+				url: url.href,
+				content: skill.content,
+				contentType: "text/markdown",
+				size: Buffer.byteLength(skill.content, "utf-8"),
+				sourcePath: targetPath,
+				notes: [],
+			};
 		}
 
 		const file = Bun.file(targetPath);

@@ -1,34 +1,9 @@
 /**
- * Regression guard for Korean IME cursor positioning in the Input
- * component.
+ * Regression guard for Korean IME cursor positioning in the Input component.
  *
- * Background: macOS Korean IME (2-bul keyboard) emits Hangul Compatibility
- * Jamo (U+3131..U+318E) during composition. Before commit 79e3170c6 the
- * Input.render() computed `cursorCols = visibleWidth(value.slice(0,
- * cursorIndex))` and `Bun.stringWidth` returned 2 for each jamo (per UAX
- * #11 EAW=W), while every macOS terminal renders them as 1 cell.
- *
- * The user-visible bug was a GROWING horizontal gap between the typed
- * jamo and the IME candidate window — every additional jamo doubled the
- * offset because `cursorCols` was N×2 instead of N×1. With 14 jamo typed,
- * the gap was ~14 cells.
- *
- * After the JS-side width correction, `cursorCols` is N×1. The Rust
- * `pi-natives` `sliceWithWidth` still treats jamo as 2 cells (binary
- * package; follow-up), so the cursor marker placement in `Input.render()`
- * has a residual ≤1-cell-per-jamo offset — but the user-visible "growing
- * gap" is gone because the JS-side `cursorCols` no longer doubles.
- *
- * What this test guards:
- *   - The cursor column for a value containing N jamo is **bounded above
- *     by `PROMPT_WIDTH + N`** (the correct cell count after the fix).
- *     Before the fix it would have been ~`PROMPT_WIDTH + 2N`, which is
- *     what the test catches.
- *   - Pure-ASCII and Hangul-syllable baselines are unchanged.
- *
- * What this test does NOT guard:
- *   - The Rust-side `sliceWithWidth` jamo discrepancy. Tracked as a
- *     follow-up; will tighten this test once the Rust crate is rebuilt.
+ * Compatibility jamo (U+3131..U+318E) are terminal-wide glyphs, so the cursor
+ * column should advance by two cells per typed jamo. Conjoining jamo input is
+ * normalized to NFC elsewhere; this test covers the compatibility-jamo path.
  */
 import { describe, expect, it } from "bun:test";
 import { CURSOR_MARKER } from "@gajae-code/tui";
@@ -57,7 +32,7 @@ function cursorColAfterTyping(text: string, width = 80): number {
 
 const PROMPT_WIDTH = 2; // "> "
 
-describe("Input cursor column does not grow at 2× per jamo", () => {
+describe("Input cursor column tracks compatibility jamo width", () => {
 	it("ASCII baseline: cursor lands exactly after the typed text", () => {
 		expect(cursorColAfterTyping("hello")).toBe(PROMPT_WIDTH + 5);
 	});
@@ -66,26 +41,20 @@ describe("Input cursor column does not grow at 2× per jamo", () => {
 		expect(cursorColAfterTyping("안녕")).toBe(PROMPT_WIDTH + 4);
 	});
 
-	it("single jamo: cursor column is at most `PROMPT_WIDTH + 1`", () => {
-		// Before fix: PROMPT_WIDTH + 2 = 4. After fix: ≤ 3.
-		expect(cursorColAfterTyping("ㅁ")).toBeLessThanOrEqual(PROMPT_WIDTH + 1);
+	it("single compatibility jamo advances by 2 cells", () => {
+		expect(cursorColAfterTyping("ㅁ")).toBe(PROMPT_WIDTH + 2);
 	});
 
-	it("8 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 8`", () => {
-		// Before fix: PROMPT_WIDTH + 16 = 18. After fix: ≤ 10.
-		expect(cursorColAfterTyping("ㅁㄴㅁㄴㅇㅂㄴㅂ")).toBeLessThanOrEqual(PROMPT_WIDTH + 8);
+	it("8 consecutive compatibility jamo advance by 16 cells", () => {
+		expect(cursorColAfterTyping("ㅁㄴㅁㄴㅇㅂㄴㅂ")).toBe(PROMPT_WIDTH + 16);
 	});
 
-	it("20 consecutive jamo: cursor column is at most `PROMPT_WIDTH + 20`", () => {
-		// Before fix: PROMPT_WIDTH + 40 = 42 (catastrophic gap). After fix: ≤ 22.
+	it("20 consecutive compatibility jamo advance by 40 cells", () => {
 		const jamo = "ㅁㄴㄷㅂㅈㅎㅋㅌㄱㄹ".repeat(2);
-		expect(cursorColAfterTyping(jamo)).toBeLessThanOrEqual(PROMPT_WIDTH + 20);
+		expect(cursorColAfterTyping(jamo, 120)).toBe(PROMPT_WIDTH + 40);
 	});
 
-	it("cursor column grows by ≤1 per typed jamo (not 2)", () => {
-		// The regression: each typed jamo would advance cursor by 2 columns
-		// instead of 1, doubling the offset every keystroke. Assert the
-		// per-step delta never exceeds 1.
+	it("cursor column grows by 2 per typed compatibility jamo", () => {
 		const input = new Input();
 		(input as unknown as { focused: boolean }).focused = true;
 		const jamo = "ㅁㄴㅇㅂㅈㅎㅋㅌㄷㄹ";
@@ -96,7 +65,7 @@ describe("Input cursor column does not grow at 2× per jamo", () => {
 			const markerIdx = line.indexOf(CURSOR_MARKER);
 			const col = visibleWidth(line.slice(0, markerIdx));
 			const delta = col - prevCol;
-			expect(delta).toBeLessThanOrEqual(1);
+			expect(delta).toBe(2);
 			prevCol = col;
 		}
 	});

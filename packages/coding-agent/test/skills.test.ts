@@ -4,7 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Skill as CapabilitySkill, skillCapability } from "@gajae-code/coding-agent/capability/skill";
 import { getCapability } from "@gajae-code/coding-agent/discovery";
-import { loadSkills, loadSkillsFromDir, type Skill } from "@gajae-code/coding-agent/extensibility/skills";
+import {
+	loadSkills,
+	loadSkillsFromDir,
+	parseSkillInvocations,
+	type Skill,
+} from "@gajae-code/coding-agent/extensibility/skills";
 
 const fixturesDir = path.resolve(import.meta.dirname, "fixtures/skills");
 const collisionFixturesDir = path.resolve(import.meta.dirname, "fixtures/skills-collision");
@@ -18,6 +23,39 @@ const expectedFixtureSkillOrder: string[] = [
 	"unknown-field",
 	"valid-skill",
 ];
+
+function makeSkill(name: string): Skill {
+	return {
+		name,
+		description: `${name} description`,
+		filePath: `/tmp/${name}/SKILL.md`,
+		baseDir: `/tmp/${name}`,
+		source: "test",
+	};
+}
+
+describe("parseSkillInvocations", () => {
+	const alpha = makeSkill("alpha");
+	const beta = makeSkill("beta");
+	const skillsByCommandName = new Map([
+		["skill:alpha", alpha],
+		["skill:beta", beta],
+		["alpha", alpha],
+	]);
+
+	it("splits chained canonical skill invocations without treating args as commands", () => {
+		expect(parseSkillInvocations("/skill:alpha first /skill:beta second /not-a-skill", skillsByCommandName)).toEqual([
+			{ commandName: "skill:alpha", args: "first", skill: alpha },
+			{ commandName: "skill:beta", args: "second /not-a-skill", skill: beta },
+		]);
+	});
+
+	it("requires the prompt to start with a recognized canonical skill command", () => {
+		expect(parseSkillInvocations("normal text /skill:alpha later", skillsByCommandName)).toEqual([]);
+		expect(parseSkillInvocations("/alpha autocomplete alias is not invocation", skillsByCommandName)).toEqual([]);
+		expect(parseSkillInvocations("/skill:unknown /skill:alpha later", skillsByCommandName)).toEqual([]);
+	});
+});
 
 describe("skills", () => {
 	describe("loadSkillsFromDir", () => {
@@ -195,36 +233,10 @@ describe("skills", () => {
 			}
 		});
 
-		it("should keep user Claude skills when project .claude/skills is missing", async () => {
-			const tempHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-claude-home-"));
-			const tempProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-claude-project-"));
-
-			try {
-				const userSkillDir = path.join(tempHomeDir, ".claude", "skills", "user-only-skill");
-				await fs.mkdir(userSkillDir, { recursive: true });
-				await fs.writeFile(
-					path.join(userSkillDir, "SKILL.md"),
-					[
-						"---",
-						"name: user-only-skill",
-						"description: User-only Claude skill",
-						"---",
-						"",
-						"# User-only skill",
-					].join("\n"),
-				);
-
-				const capability = getCapability<CapabilitySkill>(skillCapability.id);
-				expect(capability).toBeDefined();
-				const claudeProvider = capability?.providers.find(provider => provider.id === "claude");
-				expect(claudeProvider).toBeDefined();
-
-				const result = await claudeProvider!.load({ cwd: tempProjectDir, home: tempHomeDir, repoRoot: null });
-				expect(result.items.some(skill => skill.name === "user-only-skill" && skill.level === "user")).toBe(true);
-			} finally {
-				await fs.rm(tempProjectDir, { recursive: true, force: true });
-				await fs.rm(tempHomeDir, { recursive: true, force: true });
-			}
+		it("does not register the Claude skill provider by default", async () => {
+			const capability = getCapability<CapabilitySkill>(skillCapability.id);
+			expect(capability).toBeDefined();
+			expect(capability?.providers.some(provider => provider.id === "claude")).toBe(false);
 		});
 
 		it("should filter out ignoredSkills", async () => {
