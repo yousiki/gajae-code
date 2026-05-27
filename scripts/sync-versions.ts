@@ -13,12 +13,15 @@ interface PackageJson {
 	version: string;
 	dependencies?: Record<string, string>;
 	devDependencies?: Record<string, string>;
+	private?: boolean;
 }
 
 interface PackageInfo {
 	path: string;
 	data: PackageJson;
 }
+
+const VERSION_LOCKSTEP_EXEMPT_PACKAGES = new Set(["gajae-code"]);
 
 const packagesDir = join(process.cwd(), "packages");
 const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
@@ -34,16 +37,24 @@ for (const dir of packageDirs) {
 	try {
 		const pkg = (await Bun.file(pkgPath).json()) as PackageJson;
 		packages[dir] = { path: pkgPath, data: pkg };
-		versionMap[pkg.name] = pkg.version;
+		if (!pkg.private && !VERSION_LOCKSTEP_EXEMPT_PACKAGES.has(pkg.name)) {
+			versionMap[pkg.name] = pkg.version;
+		}
 	} catch (e) {
 		const error = e as Error;
 		console.error(`Failed to read ${pkgPath}:`, error.message);
 	}
 }
 
-console.log("Current versions:");
+console.log("Current lockstep versions:");
 for (const [name, version] of Object.entries(versionMap).sort()) {
 	console.log(`  ${name}: ${version}`);
+}
+for (const pkg of Object.values(packages).filter(pkg => VERSION_LOCKSTEP_EXEMPT_PACKAGES.has(pkg.data.name))) {
+	console.log(`  ${pkg.data.name}: ${pkg.data.version} (lockstep-exempt wrapper)`);
+}
+for (const pkg of Object.values(packages).filter(pkg => pkg.data.private)) {
+	console.log(`  ${pkg.data.name}: ${pkg.data.version} (private package)`);
 }
 
 // Verify all versions are the same (lockstep)
@@ -62,6 +73,7 @@ console.log("\n✅ All packages at same version (lockstep)");
 // Update all inter-package dependencies
 let totalUpdates = 0;
 for (const [dir, pkg] of Object.entries(packages)) {
+	if (pkg.data.private || VERSION_LOCKSTEP_EXEMPT_PACKAGES.has(pkg.data.name)) continue;
 	let updated = false;
 
 	// Check dependencies

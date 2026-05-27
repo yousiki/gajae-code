@@ -22,7 +22,15 @@ describe("unscoped gajae-code package publication", () => {
 
 		expect(aliasManifest.private).toBeUndefined();
 		expect(aliasManifest.name).toBe("gajae-code");
-		expect(aliasManifest.version).toBe(codingAgentManifest.version);
+		// The unscoped wrapper may carry a patch-only hotfix version when an
+		// immutable npm publish has to be superseded without republishing the
+		// scoped CLI. Its dependency remains catalog-backed so the release
+		// publisher resolves it to the current @gajae-code/coding-agent version.
+		expect(aliasManifest.version).toMatch(/^\d+\.\d+\.\d+$/);
+		expect(aliasManifest.version.split(".").slice(0, 2)).toEqual(codingAgentManifest.version.split(".").slice(0, 2));
+		expect(Number(aliasManifest.version.split(".")[2])).toBeGreaterThanOrEqual(
+			Number(codingAgentManifest.version.split(".")[2]),
+		);
 		expect(aliasManifest.bin).toEqual({ gjc: "bin/gjc.js" });
 		expect(aliasManifest.dependencies?.["@gajae-code/coding-agent"]).toBe("catalog:");
 	});

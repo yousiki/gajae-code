@@ -211,6 +211,7 @@ function planTasks(paths: readonly string[], packages: readonly WorkspacePackage
 		add(tasks, "wrapper-version", "Unscoped wrapper CLI version smoke", ["bun", "packages/gajae-code/bin/gjc.js", "--version"]);
 	}
 	if (publishChanged) {
+		add(tasks, "release-publish-contract", "Release publish contract tests", ["bun", "run", "test:release"]);
 		add(tasks, "release-publish-dry-run", "Release publish dry-run", ["bun", "scripts/ci-release-publish.ts", "--dry-run"]);
 	}
 

@@ -70,16 +70,18 @@ set -e
 REGISTRY="http://localhost:4873"
 PACKAGES=(utils natives ai agent tui stats coding-agent gajae-code)
 
-# Build version map from all package.json files
-declare -A VERSION_MAP
+# Build version maps from local workspaces and the root catalog.
+jq '.workspaces.catalog // {}' /repo/package.json > /tmp/catalog-versions.json
+echo '{}' > /tmp/workspace-versions.json
 for pkg in "${PACKAGES[@]}"; do
     name=$(jq -r '.name' "packages/$pkg/package.json")
     version=$(jq -r '.version' "packages/$pkg/package.json")
-    VERSION_MAP[$name]=$version
+    jq --arg name "$name" --arg version "$version" '. + {($name): $version}' /tmp/workspace-versions.json > /tmp/workspace-versions.next.json
+    mv /tmp/workspace-versions.next.json /tmp/workspace-versions.json
     echo "Found $name@$version"
 done
 
-# Resolve workspace:* in each package.json and publish
+# Resolve workspace:* and catalog: specs in each package.json and publish
 for pkg in "${PACKAGES[@]}"; do
     echo ""
     echo "=== Publishing packages/$pkg ==="
@@ -88,20 +90,28 @@ for pkg in "${PACKAGES[@]}"; do
     # Backup original
     cp package.json package.json.bak
     
-    # Resolve workspace:* references
-    for dep_name in "${!VERSION_MAP[@]}"; do
-        dep_version="${VERSION_MAP[$dep_name]}"
-        # Replace "workspace:*" with actual version for this dependency
-        jq --arg name "$dep_name" --arg ver "$dep_version" \
-            '(.dependencies[$name] // empty) |= (if . == "workspace:*" then $ver else . end) |
-             (.devDependencies[$name] // empty) |= (if . == "workspace:*" then $ver else . end) |
-             (.peerDependencies[$name] // empty) |= (if . == "workspace:*" then $ver else . end)' \
-            package.json > package.json.tmp && mv package.json.tmp package.json
-    done
+    # Replace workspace:* with local package versions and catalog: with root catalog versions.
+    jq --slurpfile workspace /tmp/workspace-versions.json --slurpfile catalog /tmp/catalog-versions.json '
+        def resolve_spec($name; $value):
+            if ($value | type) != "string" then $value
+            elif $value == "workspace:*" or ($value | startswith("workspace:")) then ($workspace[0][$name] // $value)
+            elif $value == "catalog:" or ($value | startswith("catalog:")) then ($catalog[0][$name] // $value)
+            else $value
+            end;
+        def rewrite_field($field):
+            if (.[$field] | type) == "object" then
+                .[$field] |= with_entries(.value = resolve_spec(.key; .value))
+            else .
+            end;
+        rewrite_field("dependencies") |
+        rewrite_field("devDependencies") |
+        rewrite_field("peerDependencies") |
+        rewrite_field("optionalDependencies")
+    ' package.json > package.json.tmp && mv package.json.tmp package.json
     
     # Show what we're publishing
     echo "Dependencies:"
-    jq '.dependencies | to_entries[] | select(.value | startswith("@gajae-code") or startswith("workspace"))' package.json 2>/dev/null || true
+    jq '.dependencies | to_entries[] | select((.value | type) == "string" and (.value | test("^(@gajae-code|workspace|catalog)")))' package.json 2>/dev/null || true
     
     # Publish
     npm publish --registry "$REGISTRY"
