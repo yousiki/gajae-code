@@ -144,18 +144,26 @@ function isWorktreeDirty(worktreePath: string): boolean {
 	return runGit(worktreePath, ["status", "--porcelain"]).length > 0;
 }
 
+function resolveOptionalWorktreeName(args: string[], index: number): { name: string | null; nextIndex: number } {
+	const next = args[index + 1];
+	if (!next) return { name: null, nextIndex: index };
+	if (next === "--") return { name: null, nextIndex: index + 1 };
+	if (next.startsWith("-")) return { name: null, nextIndex: index };
+	return { name: next.trim() || null, nextIndex: index + 1 };
+}
+
 export function parseLaunchWorktreeMode(args: string[]): ParsedLaunchWorktreeMode {
 	let mode: GjcLaunchWorktreeMode = { enabled: false };
 	const remainingArgs: string[] = [];
 
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index] ?? "";
-		if (arg === "--worktree") {
-			mode = { enabled: true, detached: true, name: null };
-			continue;
-		}
-		if (arg === "-w") {
-			mode = { enabled: true, detached: true, name: null };
+		if (arg === "--worktree" || arg === "-w") {
+			const parsed = resolveOptionalWorktreeName(args, index);
+			mode = parsed.name
+				? { enabled: true, detached: false, name: parsed.name }
+				: { enabled: true, detached: true, name: null };
+			index = parsed.nextIndex;
 			continue;
 		}
 		if (arg.startsWith("--worktree=")) {
