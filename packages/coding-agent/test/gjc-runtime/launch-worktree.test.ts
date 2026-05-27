@@ -64,7 +64,11 @@ afterEach(async () => {
 
 describe("default launch worktrees", () => {
 	it("parses and strips launch worktree flags", () => {
-		expect(parseLaunchWorktreeMode(["--worktree", "hello"])).toEqual({
+		expect(parseLaunchWorktreeMode(["--worktree", "feature/demo", "hello"])).toEqual({
+			mode: { enabled: true, detached: false, name: "feature/demo" },
+			remainingArgs: ["hello"],
+		});
+		expect(parseLaunchWorktreeMode(["--worktree", "--", "hello"])).toEqual({
 			mode: { enabled: true, detached: true, name: null },
 			remainingArgs: ["hello"],
 		});
@@ -77,7 +81,11 @@ describe("default launch worktrees", () => {
 			mode: { enabled: true, detached: false, name: "feature/demo" },
 			remainingArgs: ["hello"],
 		});
-		expect(parseLaunchWorktreeMode(["-w", "hello"])).toEqual({
+		expect(parseLaunchWorktreeMode(["-w", "feature/demo", "hello"])).toEqual({
+			mode: { enabled: true, detached: false, name: "feature/demo" },
+			remainingArgs: ["hello"],
+		});
+		expect(parseLaunchWorktreeMode(["-w", "--", "hello"])).toEqual({
 			mode: { enabled: true, detached: true, name: null },
 			remainingArgs: ["hello"],
 		});
@@ -91,7 +99,7 @@ describe("default launch worktrees", () => {
 		const repo = await createRepo("gjc-launch-worktree-");
 		await fs.mkdir(path.join(repo, "node_modules"));
 
-		const first = prepareLaunchWorktree(repo, ["--worktree", "hello"]);
+		const first = prepareLaunchWorktree(repo, ["--worktree", "--", "hello"]);
 		const branchSlug = testSlug(run("git", ["branch", "--show-current"], repo));
 		const expectedPath = path.join(path.dirname(repo), `${path.basename(repo)}.gajae-code-worktrees`, branchSlug);
 
@@ -133,6 +141,24 @@ describe("default launch worktrees", () => {
 		run("git", ["commit", "-m", "next"], repo);
 
 		expect(() => prepareLaunchWorktree(repo, ["--worktree"])).toThrow(/worktree_dirty:/);
+	});
+
+	it("creates named worktrees without reusing a dirty detached source-branch worktree", async () => {
+		const repo = await createRepo("gjc-launch-dirty-detached-named-worktree-");
+		const detached = prepareLaunchWorktree(repo, ["--worktree"]);
+		expect(detached.worktree.enabled && detached.worktree.created).toBe(true);
+		await Bun.write(path.join(detached.cwd, "dirty.txt"), "dirty\n");
+
+		const named = prepareLaunchWorktree(repo, ["--worktree", "feat/hud-ui-alignment"]);
+		const expectedPath = path.join(
+			path.dirname(repo),
+			`${path.basename(repo)}.gajae-code-worktrees`,
+			testSlug("feat/hud-ui-alignment"),
+		);
+
+		expect(await fs.realpath(named.cwd)).toBe(await fs.realpath(expectedPath));
+		expect(named.worktree.enabled && named.worktree.branchName).toBe("feat/hud-ui-alignment");
+		expect(run("git", ["branch", "--show-current"], named.cwd)).toBe("feat/hud-ui-alignment");
 	});
 
 	it("creates named launch worktrees from reusable branch names", async () => {
