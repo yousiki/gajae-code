@@ -184,6 +184,44 @@ describe("native GJC ultragoal runtime", () => {
 
 		expect(diagnostic.state).toBe("active_verified_complete");
 	});
+	it("treats refreshed final aggregate receipts as stale after later goal mutation", async () => {
+		const root = await tempDir();
+		const created = await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
+		await startNextUltragoalGoal({ cwd: root });
+		const snapshot = () =>
+			JSON.stringify({
+				goal: { objective: created.gjcObjective, status: "active", updatedAt: new Date().toISOString() },
+			});
+
+		await checkpointUltragoalGoal({
+			cwd: root,
+			goalId: "G001",
+			status: "complete",
+			evidence: "tests passed",
+			gjcGoalJson: snapshot(),
+			qualityGateJson: passingQualityGate(),
+		});
+		const plan = await checkpointUltragoalGoal({
+			cwd: root,
+			goalId: "G001",
+			status: "complete",
+			evidence: "tests passed again",
+			gjcGoalJson: snapshot(),
+			qualityGateJson: passingQualityGate(),
+		});
+		const goal = plan.goals[0];
+		if (!goal) throw new Error("missing goal");
+		goal.objective = "mutated after refreshed receipt";
+
+		const diagnostic = validateCompletionReceipt({
+			plan,
+			ledger: await readUltragoalLedger(root),
+			goal,
+			receiptKind: "final-aggregate",
+		});
+
+		expect(diagnostic.state).toBe("active_stale_receipt");
+	});
 
 	it("blocks complete checkpoints without full architect and executor verification", async () => {
 		const root = await tempDir();
