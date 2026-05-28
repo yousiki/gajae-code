@@ -2,7 +2,7 @@ import { ThinkingLevel } from "@gajae-code/agent-core";
 import { getOAuthProviders } from "@gajae-code/ai/utils/oauth";
 import type { OAuthProvider } from "@gajae-code/ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@gajae-code/tui";
-import { Input, Loader, Spacer, Text } from "@gajae-code/tui";
+import { Loader, Spacer, Text } from "@gajae-code/tui";
 import { getAgentDbPath, getProjectDir } from "@gajae-code/utils";
 import { settings } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
@@ -37,6 +37,7 @@ import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
+import { LoginDialogComponent } from "../components/login-dialog";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
@@ -51,16 +52,6 @@ import { ToolExecutionComponent } from "../components/tool-execution";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
 import type { SessionObserverRegistry } from "../session-observer-registry";
-
-const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
-	"anthropic",
-	"openai-codex",
-	"gitlab-duo",
-	"google-gemini-cli",
-	"google-antigravity",
-]);
-
-const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
 function formatProviderOnboardingCommandGuide(): string {
 	return [
@@ -871,67 +862,47 @@ export class SelectorController {
 
 	async #handleOAuthLogin(providerId: string): Promise<void> {
 		this.ctx.showStatus(`Logging in to ${providerId}…`);
-		const manualInput = this.ctx.oauthManualInput;
-		const useManualInput = CALLBACK_SERVER_PROVIDERS.has(providerId as OAuthProvider);
+		let overlayHandle: OverlayHandle | undefined;
+		const loginDialog = new LoginDialogComponent(this.ctx.ui, providerId, () => {
+			overlayHandle?.hide();
+			this.ctx.ui.requestRender();
+		});
+		overlayHandle = this.ctx.ui.showOverlay(loginDialog, {
+			anchor: "center",
+			width: "80%",
+			maxHeight: "70%",
+			margin: 1,
+		});
+		this.ctx.ui.setFocus(loginDialog);
+		this.ctx.ui.requestRender();
+
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
+				signal: loginDialog.signal,
 				onAuth: (info: { url: string; instructions?: string }) => {
-					this.ctx.chatContainer.addChild(new Spacer(1));
-					this.ctx.chatContainer.addChild(new Text(theme.fg("dim", info.url), 1, 0));
-					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
-					this.ctx.chatContainer.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
-					if (info.instructions) {
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(new Text(theme.fg("warning", info.instructions), 1, 0));
-					}
-					if (useManualInput) {
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(new Text(theme.fg("dim", MANUAL_LOGIN_TIP), 1, 0));
-					}
-					this.ctx.ui.requestRender();
-					this.ctx.openInBrowser(info.url);
+					loginDialog.showAuth(info.url, info.instructions);
 				},
-				onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-					this.ctx.chatContainer.addChild(new Spacer(1));
-					this.ctx.chatContainer.addChild(new Text(theme.fg("warning", prompt.message), 1, 0));
-					if (prompt.placeholder) {
-						this.ctx.chatContainer.addChild(new Text(theme.fg("dim", prompt.placeholder), 1, 0));
-					}
-					this.ctx.ui.requestRender();
-					const { promise, resolve } = Promise.withResolvers<string>();
-					const codeInput = new Input();
-					codeInput.onSubmit = () => {
-						const code = codeInput.getValue();
-						this.ctx.editorContainer.clear();
-						this.ctx.editorContainer.addChild(this.ctx.editor);
-						this.ctx.ui.setFocus(this.ctx.editor);
-						resolve(code);
-					};
-					this.ctx.editorContainer.clear();
-					this.ctx.editorContainer.addChild(codeInput);
-					this.ctx.ui.setFocus(codeInput);
-					this.ctx.ui.requestRender();
-					return promise;
-				},
+				onPrompt: (prompt: { message: string; placeholder?: string }) =>
+					loginDialog.showPrompt(prompt.message, prompt.placeholder),
 				onProgress: (message: string) => {
-					this.ctx.chatContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
-					this.ctx.ui.requestRender();
+					loginDialog.showProgress(message);
 				},
-				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
+				onManualCodeInput: () => loginDialog.showManualInput("Paste the authorization code or final redirect URL:"),
 			});
 			await this.ctx.session.modelRegistry.refresh();
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
+			overlayHandle?.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
+			this.ctx.showStatus(`Logged in to ${providerId}`);
 			this.ctx.ui.requestRender();
 		} catch (error: unknown) {
-			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
-		} finally {
-			if (useManualInput) {
-				manualInput.clear(`Manual OAuth input cleared for ${providerId}`);
+			overlayHandle?.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
+			if (loginDialog.signal.aborted) {
+				this.ctx.showStatus("Login cancelled");
+				this.ctx.ui.requestRender();
+				return;
 			}
+			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 

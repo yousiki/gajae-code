@@ -1,5 +1,5 @@
 import { getOAuthProviders } from "@gajae-code/ai/utils/oauth";
-import { Container, getKeybindings, Input, Spacer, Text, type TUI } from "@gajae-code/tui";
+import { Container, getKeybindings, Input, matchesKey, Spacer, Text, type TUI } from "@gajae-code/tui";
 import { theme } from "../../modes/theme/theme";
 import { openPath } from "../../utils/open";
 import { DynamicBorder } from "./dynamic-border";
@@ -14,6 +14,7 @@ export class LoginDialogComponent extends Container {
 	#abortController = new AbortController();
 	#inputResolver?: (value: string) => void;
 	#inputRejecter?: (error: Error) => void;
+	#authUrl?: string;
 
 	constructor(
 		tui: TUI,
@@ -71,21 +72,19 @@ export class LoginDialogComponent extends Container {
 	 * Called by onAuth callback - show URL and optional instructions
 	 */
 	showAuth(url: string, instructions?: string): void {
+		this.#authUrl = url;
 		this.#contentContainer.clear();
 		this.#contentContainer.addChild(new Spacer(1));
-		this.#contentContainer.addChild(new Text(theme.fg("accent", url), 1, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("text", "Sign in required"), 1, 0));
 
-		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
-		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
-		this.#contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 1, 0));
+		const hyperlink = `\x1b]8;;${url}\x07Open login\x1b]8;;\x07`;
+		this.#contentContainer.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("dim", "Enter/o: open · Esc: cancel"), 1, 0));
 
 		if (instructions) {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("warning", instructions), 1, 0));
 		}
-
-		// Open browser (best-effort)
-		openPath(url);
 
 		this.#tui.requestRender();
 	}
@@ -155,6 +154,11 @@ export class LoginDialogComponent extends Container {
 
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.#cancel();
+			return;
+		}
+
+		if (!this.#inputResolver && this.#authUrl && (matchesKey(data, "enter") || data === "\n" || data === "o")) {
+			openPath(this.#authUrl);
 			return;
 		}
 
