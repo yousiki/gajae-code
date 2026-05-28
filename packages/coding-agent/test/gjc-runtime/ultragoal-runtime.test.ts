@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { validateCompletionReceipt } from "@gajae-code/coding-agent/gjc-runtime/ultragoal-guard";
+import {
+	readUltragoalVerificationState,
+	validateCompletionReceipt,
+} from "@gajae-code/coding-agent/gjc-runtime/ultragoal-guard";
 import {
 	checkpointUltragoalGoal,
 	createUltragoalPlan,
 	getUltragoalStatus,
-	hashStructuredValue,
 	readUltragoalLedger,
 	runNativeUltragoalCommand,
 	startNextUltragoalGoal,
@@ -85,7 +87,7 @@ describe("native GJC ultragoal runtime", () => {
 
 	it("starts and checkpoints the current goal", async () => {
 		const root = await tempDir();
-		await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
+		const created = await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
 
 		const started = await startNextUltragoalGoal({ cwd: root });
 		expect(started.goal?.status).toBe("active");
@@ -94,10 +96,16 @@ describe("native GJC ultragoal runtime", () => {
 			goalId: "G001",
 			status: "complete",
 			evidence: "tests passed",
-			gjcGoalJson: JSON.stringify({ goal: { status: "complete" } }),
+			gjcGoalJson: JSON.stringify({
+				goal: { objective: created.gjcObjective, status: "active", updatedAt: new Date().toISOString() },
+			}),
 			qualityGateJson: passingQualityGate(),
 		});
 		const status = await getUltragoalStatus(root);
+		const verification = await readUltragoalVerificationState({
+			cwd: root,
+			currentGoal: { objective: created.gjcObjective },
+		});
 
 		expect(plan.goals[0]?.status).toBe("complete");
 		expect(status.status).toBe("complete");
@@ -107,6 +115,7 @@ describe("native GJC ultragoal runtime", () => {
 			goalId: "G001",
 			receiptKind: "final-aggregate",
 		});
+		expect(verification.state).toBe("active_verified_complete");
 	});
 
 	it("treats receipts as stale after target goal mutation", async () => {
@@ -134,66 +143,42 @@ describe("native GJC ultragoal runtime", () => {
 
 		expect(diagnostic.state).toBe("active_stale_receipt");
 	});
-	it("accepts refreshed final aggregate receipts that record a complete pre-checkpoint status", () => {
-		const qualityGate = passingQualityGate();
-		const plan = {
-			version: 1 as const,
-			brief: "Ship the fix",
-			gjcGoalMode: "aggregate" as const,
-			gjcObjective: "objective",
-			createdAt: "2026-05-28T00:00:00.000Z",
-			updatedAt: "2026-05-28T00:00:01.000Z",
-			goals: [
-				{
-					id: "G001",
-					title: "Ship the fix",
-					objective: "Ship the fix",
-					status: "complete" as const,
-					createdAt: "2026-05-28T00:00:00.000Z",
-					updatedAt: "2026-05-28T00:00:01.000Z",
-					completedAt: "2026-05-28T00:00:01.000Z",
-					completionVerification: {
-						schemaVersion: 1 as const,
-						receiptId: "receipt-1",
-						verifiedAt: "2026-05-28T00:00:01.000Z",
-						goalId: "G001",
-						receiptKind: "final-aggregate" as const,
-						goalStatusBeforeCheckpoint: "complete" as const,
-						gjcGoalMode: "aggregate" as const,
-						gjcObjective: "objective",
-						qualityGateHash: hashStructuredValue(qualityGate),
-						planGeneration: "stale-generation-is-ignored-for-refreshed-complete-receipts",
-						basis: {
-							planHashBeforeCheckpoint: "hash",
-							latestRelevantLedgerEventIdBeforeCheckpoint: "goal-started",
-							goalUpdatedAtBeforeCheckpoint: "2026-05-28T00:00:01.000Z",
-							relevantGoalIdsBeforeCheckpoint: ["G001"],
-							requiredGoalSetHashBeforeCheckpoint: "hash",
-						},
-						checkpointLedgerEventId: "goal-checkpointed",
-					},
-				},
-			],
-		};
-		const receipt = plan.goals[0]?.completionVerification;
-		if (!receipt) throw new Error("missing receipt");
-		const ledger = [
-			{ eventId: "goal-started", event: "goal_started", goalId: "G001", timestamp: "2026-05-28T00:00:00.500Z" },
-			{
-				eventId: "goal-checkpointed",
-				event: "goal_checkpointed",
-				goalId: "G001",
-				status: "complete",
-				qualityGateJson: qualityGate,
-				completionVerification: receipt,
-				timestamp: "2026-05-28T00:00:01.000Z",
-			},
-		];
+	it("accepts fresh final aggregate receipts produced by repeated strict checkpoints", async () => {
+		const root = await tempDir();
+		const created = await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
+		await startNextUltragoalGoal({ cwd: root });
+		const snapshot = () =>
+			JSON.stringify({
+				goal: { objective: created.gjcObjective, status: "active", updatedAt: new Date().toISOString() },
+			});
+
+		await checkpointUltragoalGoal({
+			cwd: root,
+			goalId: "G001",
+			status: "complete",
+			evidence: "tests passed",
+			gjcGoalJson: snapshot(),
+			qualityGateJson: passingQualityGate(),
+		});
+		const plan = await checkpointUltragoalGoal({
+			cwd: root,
+			goalId: "G001",
+			status: "complete",
+			evidence: "tests passed again",
+			gjcGoalJson: snapshot(),
+			qualityGateJson: passingQualityGate(),
+		});
+		const goal = plan.goals[0];
+		if (!goal) throw new Error("missing goal");
+
+		const ledger = await readUltragoalLedger(root);
+		const latestEvent = ledger.at(-1) as { completionVerification?: unknown } | undefined;
+		expect(latestEvent?.completionVerification).toEqual(goal.completionVerification);
 
 		const diagnostic = validateCompletionReceipt({
 			plan,
 			ledger,
-			goal: plan.goals[0],
+			goal,
 			receiptKind: "final-aggregate",
 		});
 

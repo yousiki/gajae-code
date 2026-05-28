@@ -446,6 +446,7 @@ export function computeUltragoalPlanGeneration(input: {
 		delete goalBeforeCheckpoint.completedAt;
 		delete goalBeforeCheckpoint.completionVerification;
 	}
+	planBeforeCheckpoint.updatedAt = goalUpdatedAtBeforeCheckpoint;
 	const relevantLedger = input.ledger.filter(event => {
 		if (input.excludeEventId && event.eventId === input.excludeEventId) return false;
 		return ledgerEventTouchesGoals(event, goalIds);
@@ -633,6 +634,7 @@ export async function checkpointUltragoalGoal(input: {
 		}
 	}
 	const receiptKind = input.status === "complete" ? chooseReceiptKind(plan, goal, input.status) : null;
+	goal.evidence = evidence;
 	const pendingCheckpointEventId = crypto.randomUUID();
 	if (input.status === "complete" && receiptKind && qualityGateJson && !Array.isArray(qualityGateJson)) {
 		goal.completionVerification = buildCompletionReceipt({
@@ -647,7 +649,6 @@ export async function checkpointUltragoalGoal(input: {
 		});
 	}
 	goal.status = input.status;
-	goal.evidence = evidence;
 	goal.updatedAt = now;
 	if (input.status === "complete") goal.completedAt = now;
 	plan.updatedAt = now;
@@ -660,6 +661,7 @@ export async function checkpointUltragoalGoal(input: {
 		evidence,
 		gjcGoalJson: input.gjcGoalJson ? await readStructuredValue(input.cwd, input.gjcGoalJson) : undefined,
 		qualityGateJson,
+		completionVerification: goal.completionVerification,
 	});
 	return plan;
 }
