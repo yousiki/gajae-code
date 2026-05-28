@@ -84,7 +84,7 @@ describe("native GJC ultragoal runtime", () => {
 
 	it("starts and checkpoints the current goal", async () => {
 		const root = await tempDir();
-		const created = await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
+		await createUltragoalPlan({ cwd: root, brief: "Ship the fix" });
 
 		const started = await startNextUltragoalGoal({ cwd: root });
 		expect(started.goal?.status).toBe("active");
@@ -94,10 +94,7 @@ describe("native GJC ultragoal runtime", () => {
 			status: "complete",
 			evidence: "tests passed",
 			gjcGoalJson: JSON.stringify({ goal: { status: "complete" } }),
-			qualityGateJson: JSON.stringify({
-				verification: { status: "passed" },
-				codeReview: { recommendation: "APPROVE", architectStatus: "CLEAR" },
-			}),
+			qualityGateJson: passingQualityGate(),
 		});
 		const status = await getUltragoalStatus(root);
 
