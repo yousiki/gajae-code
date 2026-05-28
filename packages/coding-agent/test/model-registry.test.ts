@@ -164,6 +164,19 @@ describe("ModelRegistry", () => {
 	}
 
 	describe("provider base URL environment variables", () => {
+		test("does not bake the public OpenAI API URL into bundled OpenAI models", () => {
+			const restore = unsetEnvForTest("OPENAI_BASE_URL");
+			try {
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const openaiModels = getModelsForProvider(registry, "openai");
+
+				expect(openaiModels.length).toBeGreaterThan(0);
+				expect(openaiModels.some(model => model.baseUrl.includes("api.openai.com"))).toBe(false);
+			} finally {
+				restore();
+			}
+		});
+
 		test("uses OPENAI_BASE_URL for bundled OpenAI models when models config has no baseUrl override", () => {
 			const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
 			try {
