@@ -2439,6 +2439,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleHandoffCommand(customInstructions);
 	}
 
+	handleContributionPrepCommand(customInstructions?: string): Promise<void> {
+		return this.#commandController.handleContributionPrepCommand(customInstructions);
+	}
+
 	executeCompaction(
 		customInstructionsOrOptions?: string | CompactOptions,
 		isAuto?: boolean,

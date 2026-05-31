@@ -1248,7 +1248,31 @@ export class CommandController {
 			this.ctx.statusContainer.clear();
 			this.ctx.editor.onEscape = originalOnEscape;
 		}
-		this.ctx.ui.requestRender();
+	}
+
+	async handleContributionPrepCommand(customInstructions?: string): Promise<void> {
+		this.ctx.editor.setText("");
+		try {
+			const result = await this.ctx.session.prepareContributionPrep({ customInstructions, spawnWorker: true });
+			this.ctx.showStatus(
+				[
+					"Contribution prep artifacts written.",
+					`Manifest: ${result.manifestPath}`,
+					`Worker prompt: ${result.workerPromptPath}`,
+				].join("\n"),
+			);
+			this.ctx.chatContainer.addChild(
+				new Text(
+					`${theme.fg("accent", `${theme.status.success} Contribution prep ready`)}\nManifest: ${result.manifestPath}`,
+					1,
+					1,
+				),
+			);
+			this.ctx.ui.requestRender();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.ctx.showError(`Contribution prep failed: ${message}`);
+		}
 	}
 }
 

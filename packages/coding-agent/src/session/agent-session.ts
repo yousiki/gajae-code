@@ -193,6 +193,11 @@ import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
+	type ContributionPrepOptions,
+	type ContributionPrepResult,
+	prepareContributionPrep,
+} from "./contribution-prep";
+import {
 	type BashExecutionMessage,
 	type CompactionSummaryMessage,
 	type CustomMessage,
@@ -5760,6 +5765,19 @@ export class AgentSession {
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
 			this.#handoffAbortController = undefined;
 		}
+	}
+
+	async prepareContributionPrep(options: ContributionPrepOptions = {}): Promise<ContributionPrepResult> {
+		return prepareContributionPrep(
+			{
+				sessionId: this.sessionId,
+				cwd: this.sessionManager.getCwd(),
+				sessionFile: this.sessionFile,
+				messages: this.agent.state.messages,
+				customInstructions: options.customInstructions,
+			},
+			options,
+		);
 	}
 
 	/**

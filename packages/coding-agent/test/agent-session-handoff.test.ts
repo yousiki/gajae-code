@@ -92,6 +92,19 @@ describe("AgentSession handoff", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("prepares contribution artifacts without switching the active session", async () => {
+		const beforeSessionFile = session.sessionFile;
+		const beforeSessionId = session.sessionId;
+		const result = await session.prepareContributionPrep({ artifactRoot: path.join(tempDir.path(), "prep") });
+
+		expect(result.manifestPath).toEndWith("manifest.json");
+		expect(session.sessionFile).toBe(beforeSessionFile);
+		expect(session.sessionId).toBe(beforeSessionId);
+		expect(
+			sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "handoff"),
+		).toHaveLength(0);
+	});
+
 	it("does not run auto-compaction after handoff turn completes", async () => {
 		const handoffText = "## Goal\nContinue from here";
 		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);

@@ -793,6 +793,29 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "contribution-prep",
+		description: "Dump redacted session context and spawn a fresh contribution-prep worker",
+		inlineHint: "[focus instructions]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const result = await runtime.session.prepareContributionPrep({
+				customInstructions: command.args || undefined,
+				spawnWorker: true,
+			});
+			await runtime.output(
+				[
+					"Contribution prep artifacts written.",
+					`Manifest: ${result.manifestPath}`,
+					`Worker prompt: ${result.workerPromptPath}`,
+				].join("\n"),
+			);
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleContributionPrepCommand(command.args || undefined);
+		},
+	},
+	{
 		name: "resume",
 		description: "Resume a different session",
 		handleTui: (_command, runtime) => {

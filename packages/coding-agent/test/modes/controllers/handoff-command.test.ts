@@ -76,4 +76,43 @@ describe("/handoff command", () => {
 		expect(ctx.editor.onEscape).toBe(originalOnEscape);
 		expect(ctx.session.handoff).toHaveBeenCalledWith("focus on tests");
 	});
+
+	it("runs contribution-prep without rebuilding or switching the active chat", async () => {
+		const statusContainer = createContainer();
+		const chatContainer = createContainer();
+		const requestRender = vi.fn();
+		const ctx = {
+			sessionManager: { getEntries: () => [{ type: "message" }, { type: "message" }] },
+			session: {
+				prepareContributionPrep: vi.fn(async () => ({
+					manifestPath: "/tmp/prep/manifest.json",
+					workerPromptPath: "/tmp/prep/worker-prompt.md",
+					artifactDir: "/tmp/prep",
+					changedFiles: [],
+					spawned: true,
+				})),
+			},
+			statusContainer,
+			chatContainer,
+			ui: { requestRender },
+			editor: { setText: vi.fn() },
+			rebuildChatFromMessages: vi.fn(),
+			statusLine: { invalidate: vi.fn() },
+			showStatus: vi.fn(),
+			showError: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new CommandController(ctx);
+
+		await controller.handleContributionPrepCommand("focus on repro");
+
+		expect(ctx.session.prepareContributionPrep).toHaveBeenCalledWith({
+			customInstructions: "focus on repro",
+			spawnWorker: true,
+		});
+		expect(ctx.rebuildChatFromMessages).not.toHaveBeenCalled();
+		expect(ctx.statusLine.invalidate).not.toHaveBeenCalled();
+		expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("Manifest: /tmp/prep/manifest.json"));
+		expect(chatContainer.children).toHaveLength(1);
+		expect(requestRender).toHaveBeenCalled();
+	});
 });
