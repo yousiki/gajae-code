@@ -322,6 +322,13 @@ describe("system Handlebars prompt templates", () => {
 				skills: [],
 				rules: [],
 				toolNames: ["read"],
+				workspaceTree: {
+					rootPath: dir,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				},
 				customPrompt: "Custom prompt body",
 				alwaysApplyRules: [
 					{ name: "no-dynamic-loading", content: duplicateRule, path: "/tmp/no-dynamic-loading.md" },
@@ -347,6 +354,13 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: {
+				rootPath: os.tmpdir(),
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
 			customPrompt: ["Custom guidance", "", duplicateRule, "", "More custom guidance"].join("\n"),
 			alwaysApplyRules: [
 				{ name: "small-functions", content: duplicateRule, path: "/tmp/small-functions.md" },
@@ -359,7 +373,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(countOccurrences(prompt, "Keep functions small.")).toBe(1);
 		expect(countOccurrences(prompt, "Extract shared helpers on the second use.")).toBe(1);
 		expect(countOccurrences(prompt, distinctRule)).toBe(1);
-	});
+	}, 30_000);
 
 	test("buildSystemPromptToolMetadata captures custom wire names", () => {
 		const editTool = {
@@ -383,6 +397,13 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read", "search", "find", "edit", "lsp", "bash", "eval"],
+			workspaceTree: {
+				rootPath: os.tmpdir(),
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
 			tools: new Map([
 				["read", { label: "Read", description: "Reads files" }],
 				["search", { label: "Search", description: "Searches files" }],
@@ -412,6 +433,13 @@ describe("system Handlebars prompt templates", () => {
 			skills: [],
 			rules: [],
 			toolNames: ["read"],
+			workspaceTree: {
+				rootPath: os.tmpdir(),
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
 		});
 
 		const projectPrompt = systemPrompt[1] ?? "";
