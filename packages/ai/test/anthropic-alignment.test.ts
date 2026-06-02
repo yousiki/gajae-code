@@ -154,6 +154,17 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Api-Key"]).toBeUndefined();
 	});
 
+	it("forwards a custom User-Agent through the non-Anthropic proxy branch so WAFs see the configured client", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			baseUrl: "https://api.layofflabs.com",
+			stream: true,
+			modelHeaders: { "User-Agent": "curl/8.7.1" },
+		});
+
+		expect(headers["User-Agent"]).toBe("curl/8.7.1");
+	});
+
 	it("forwards only prefix-matching Claude Code User-Agent values", () => {
 		const forwardedHeaders = buildAnthropicHeaders({
 			apiKey: "sk-ant-oat-test",

@@ -46,7 +46,7 @@ jobs:
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - name: Install system deps
            run: |
-              if sudo -n true 2>/dev/null; then
+              if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
                  sudo apt-get update
                  sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick tmux gh
                  sudo ln -sf $(which fdfind) /usr/local/bin/fd

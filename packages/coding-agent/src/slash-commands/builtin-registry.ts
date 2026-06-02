@@ -217,6 +217,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "theme",
+		description: "Open theme selector",
+		handleTui: (_command, runtime) => {
+			runtime.ctx.showThemeSelector();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "goal",
 		description: "Toggle goal mode (persistent autonomous objective for this session)",
 		subcommands: [
@@ -923,7 +931,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 						runtime.settings,
 						runtime.session,
 					);
-					await runtime.output(payload || "Memory payload is empty.");
+					await runtime.output(
+						payload || "Memory payload is empty; durable memory is unavailable or unconfirmed.",
+					);
 					return commandConsumed();
 				}
 				case "clear":
