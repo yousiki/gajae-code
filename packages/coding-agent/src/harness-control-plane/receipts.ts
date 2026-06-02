@@ -162,15 +162,19 @@ function validateFamily(receipt: ReceiptEnvelope<unknown>): string[] {
 function validateVanish(e: VanishEvidence): string[] {
 	const reasons: string[] = [];
 	if (!e || typeof e.gitDelta !== "string") return ["vanish-missing-evidence"];
-	// Hard data-loss invariant: a dirty/unknown delta must be preserved (snapshot|stash), never blocked-away.
-	if ((e.gitDelta === "dirty" || e.gitDelta === "unknown") && e.preservation === "block") {
-		reasons.push("vanish-dirty-must-preserve-not-block");
+	const protectedDelta = e.gitDelta === "dirty" || e.gitDelta === "unknown";
+	if (protectedDelta) {
+		// Hard data-loss invariant: a dirty/unknown delta must be preserved (never blocked-away),
+		// and the destructive actions must be explicitly forbidden.
+		if (e.preservation === "block") reasons.push("vanish-dirty-must-preserve-not-block");
+		for (const action of ["restart-clean", "delete", "reset"]) {
+			if (!Array.isArray(e.forbiddenActions) || !e.forbiddenActions.includes(action)) {
+				reasons.push(`vanish-must-forbid-${action}`);
+			}
+		}
 	}
 	if (e.preservation === "snapshot" && !e.snapshotComplete) reasons.push("vanish-snapshot-incomplete");
 	if (e.preservation === "stash" && !e.stashRef) reasons.push("vanish-stash-missing-ref");
-	if (!Array.isArray(e.forbiddenActions) || !e.forbiddenActions.includes("restart-clean")) {
-		reasons.push("vanish-must-forbid-restart-clean");
-	}
 	return reasons;
 }
 
