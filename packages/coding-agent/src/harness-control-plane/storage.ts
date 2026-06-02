@@ -156,7 +156,7 @@ export async function writeReceiptImmutable(
 	sessionId: string,
 	family: ReceiptFamily,
 	receiptId: string,
-	value: { receiptId: string; family: ReceiptFamily; valid: boolean; createdAt: string; [k: string]: unknown },
+	value: { receiptId: string; family: ReceiptFamily; valid: boolean; createdAt: string },
 ): Promise<ReceiptIndexEntry> {
 	assertSafeSessionId(sessionId);
 	if (!SESSION_ID_RE.test(receiptId)) {
