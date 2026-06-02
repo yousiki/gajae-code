@@ -11,6 +11,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import { type FinalizeChecks, type FinalizeResult, runFinalize, type ValidationCommandSpec } from "./finalize";
+import { type PreserveResult, preserveDirtyWorktree } from "./preserve";
 import {
 	buildReceipt,
 	type ReceiptSubject,
@@ -40,6 +41,8 @@ export interface OperateOptions {
 	rpcFactory?: () => HarnessRpc;
 	/** Bounded observation provider (scripted in tests; real = git + rpc state). */
 	observe: () => Promise<Observation>;
+	/** Real dirty-worktree preservation; injectable for tests. Defaults to git stash/diff capture. */
+	preserve?: (workspace: string) => PreserveResult;
 	finalizeChecks: FinalizeChecks;
 	validationCommands?: ValidationCommandSpec[];
 	retryBudget?: Partial<RetryBudget>;
@@ -87,14 +90,26 @@ export async function operate(goal: string, opts: OperateOptions): Promise<Opera
 
 	const writeVanish = async (obs: Observation, classification: RecoveryClassification): Promise<boolean> => {
 		const dirty = obs.gitDelta === "dirty" || obs.gitDelta === "unknown";
+		let untrackedManifest: VanishEvidence["untrackedManifest"] = [];
+		let stashRef: string | null = null;
+		let snapshotComplete = true;
+		let gitStatusPorcelain = obs.observedSignals.join(",");
+		if (dirty) {
+			const preserve = opts.preserve ?? preserveDirtyWorktree;
+			const p = preserve(opts.workspace);
+			untrackedManifest = p.untrackedManifest;
+			stashRef = p.stashRef;
+			snapshotComplete = p.snapshotComplete;
+			gitStatusPorcelain = `tracked-diff-sha:${p.trackedDiffSha256};untracked:${p.untrackedManifest.length};stash:${p.stashRef ?? "none"}`;
+		}
 		const evidence: VanishEvidence = {
 			classification,
 			gitDelta: obs.gitDelta,
-			gitStatusPorcelain: obs.observedSignals.join(","),
-			untrackedManifest: [],
-			preservation: "snapshot",
-			stashRef: null,
-			snapshotComplete: true,
+			gitStatusPorcelain,
+			untrackedManifest,
+			preservation: dirty && stashRef ? "stash" : "snapshot",
+			stashRef,
+			snapshotComplete,
 			forbiddenActions: dirty ? ["restart-clean", "delete", "reset"] : [],
 		};
 		const receipt = buildReceipt<VanishEvidence>({

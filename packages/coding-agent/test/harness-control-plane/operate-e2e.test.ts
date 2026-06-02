@@ -74,6 +74,14 @@ function baseOpts(observer: () => Promise<Observation>) {
 		rpc: new FakeRpc(),
 		rpcFactory: () => new FakeRpc(),
 		observe: observer,
+		preserve: (_ws: string) => ({
+			gitDelta: "dirty" as const,
+			trackedDiff: "diff --git a/a.ts b/a.ts",
+			trackedDiffSha256: "abc123",
+			untrackedManifest: [{ path: "b.ts", size: 3, sha256: "hh" }],
+			stashRef: "deadbeefoid",
+			snapshotComplete: true,
+		}),
 		finalizeChecks: passingChecks,
 		validationCommands: [{ name: "test", command: "bun test" }],
 		acceptanceTimeoutMs: 100,
@@ -121,7 +129,9 @@ describe("operate() autonomous lifecycle (AC-9 e2e + data-loss + red-team)", () 
 		expect(vanish).toHaveLength(1);
 		expect(vanish[0].valid).toBe(true);
 		const evidence = JSON.parse(await readFile(vanish[0].path, "utf8")).evidence as VanishEvidence;
-		expect(evidence.preservation).toBe("snapshot");
+		expect(evidence.preservation).toBe("stash");
+		expect(evidence.stashRef).toBe("deadbeefoid");
+		expect(evidence.untrackedManifest.length).toBeGreaterThanOrEqual(1);
 		expect(evidence.snapshotComplete).toBe(true);
 		expect(evidence.forbiddenActions).toContain("restart-clean");
 		expect(res.completed).toBe(true);
