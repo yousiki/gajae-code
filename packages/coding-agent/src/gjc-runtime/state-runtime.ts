@@ -21,8 +21,8 @@ import {
 	buildWorkflowStateReceipt,
 	canonicalWorkflowSkill,
 	describeWorkflowStateContract,
-	type WorkflowStateReceipt,
 	WORKFLOW_STATE_VERSION,
+	type WorkflowStateReceipt,
 } from "../skill-state/workflow-state-contract";
 import { renderCliWriteReceipt } from "./cli-write-receipt";
 import { renderStateGraph, type StateGraphFormat } from "./state-graph";

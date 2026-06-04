@@ -4,11 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { runNativeDeepInterviewCommand } from "@gajae-code/coding-agent/gjc-runtime/deep-interview-runtime";
 import { runNativeRalplanCommand } from "@gajae-code/coding-agent/gjc-runtime/ralplan-runtime";
-import { RequiredOnWriteEnvelopeSchema } from "@gajae-code/coding-agent/gjc-runtime/state-schema";
 import { migrateAndPersistLegacyState } from "@gajae-code/coding-agent/gjc-runtime/state-migrations";
 import { runNativeStateCommand } from "@gajae-code/coding-agent/gjc-runtime/state-runtime";
+import { RequiredOnWriteEnvelopeSchema } from "@gajae-code/coding-agent/gjc-runtime/state-schema";
 import { writeWorkflowEnvelopeAtomic } from "@gajae-code/coding-agent/gjc-runtime/state-writer";
-import { persistGjcTeamModeStateSummary, type GjcTeamSnapshot } from "@gajae-code/coding-agent/gjc-runtime/team-runtime";
+import {
+	type GjcTeamSnapshot,
+	persistGjcTeamModeStateSummary,
+} from "@gajae-code/coding-agent/gjc-runtime/team-runtime";
 
 const tempRoots: string[] = [];
 

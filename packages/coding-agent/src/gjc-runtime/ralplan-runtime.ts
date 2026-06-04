@@ -593,7 +593,13 @@ async function seedRalplanState(
 	if (resolved.sessionId) payload.session_id = resolved.sessionId;
 	await writeWorkflowEnvelopeAtomic(statePath, payload, {
 		cwd,
-		receipt: { cwd, skill: "ralplan", owner: "gjc-runtime", command: "gjc ralplan seed", sessionId: resolved.sessionId },
+		receipt: {
+			cwd,
+			skill: "ralplan",
+			owner: "gjc-runtime",
+			command: "gjc ralplan seed",
+			sessionId: resolved.sessionId,
+		},
 		audit: { category: "state", verb: "write", owner: "gjc-runtime", skill: "ralplan" },
 	});
 	return { statePath, runId };

@@ -4,8 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	ModeStateSchema,
-	readGjcJson,
 	RequiredOnWriteEnvelopeSchema,
+	readGjcJson,
 	SkillActiveStateSchema,
 	WorkflowStateEnvelopeSchema,
 } from "@gajae-code/coding-agent/gjc-runtime/state-schema";
@@ -93,9 +93,9 @@ describe("state-schema (A1)", () => {
 	it("ModeState and SkillActiveState schemas are lenient", () => {
 		expect(ModeStateSchema.safeParse({ active: true, current_phase: "x", extra: 1 }).success).toBe(true);
 		expect(ModeStateSchema.safeParse({ active: "no" }).success).toBe(false);
-		expect(
-			SkillActiveStateSchema.safeParse({ version: 1, active_skills: [{ skill: "ralplan" }] }).success,
-		).toBe(true);
+		expect(SkillActiveStateSchema.safeParse({ version: 1, active_skills: [{ skill: "ralplan" }] }).success).toBe(
+			true,
+		);
 		expect(SkillActiveStateSchema.safeParse({ active_skills: [{}] }).success).toBe(false);
 	});
 });
