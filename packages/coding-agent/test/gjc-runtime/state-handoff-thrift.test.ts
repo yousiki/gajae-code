@@ -136,13 +136,15 @@ describe("CONSUMER/KEY-FIELD MATRIX for compact handoff payloads", () => {
 		);
 		expect(deepWrite.status).toBe(0);
 		const deepWritePayload = JSON.parse(deepWrite.stdout ?? "{}") as Record<string, unknown>;
-		assertKeys(deepWritePayload, ["path", "sha256", "state_path", "handoff"]);
-		expect(deepWritePayload.path).toBe(deepWritePayload.path);
-		expect(deepWritePayload.sha256).toBeTruthy();
+		assertKeys(deepWritePayload, ["path", "sha256", "spec_path", "sha", "state_path", "handoff"]);
+		expect(deepWritePayload.spec_path).toBe(deepWritePayload.path);
+		expect(deepWritePayload.sha).toBe(deepWritePayload.sha256);
+		expect(deepWritePayload.spec_path).toBeTruthy();
+		expect(deepWritePayload.sha).toBeTruthy();
 		const handoff = deepWritePayload.handoff as Record<string, unknown>;
 		assertKeys(handoff, ["to", "run_id", "state_path"]);
 		expect(scrub(deepWrite.stdout ?? "")).toMatchInlineSnapshot(`
-			"{"skill":"deep-interview","stage":"final","slug":"matrix","path":"/tmp/SCRUBBED","sha256":"<sha256>","created_at":"<iso>","state_path":"/tmp/SCRUBBED","handoff":{"to":"ralplan","mode":"deliberate","state_path":"/tmp/SCRUBBED","run_id":"run-b"}}
+			"{"skill":"deep-interview","stage":"final","slug":"matrix","path":"/tmp/SCRUBBED","sha256":"<sha256>","spec_path":"/tmp/SCRUBBED","sha":"<sha256>","created_at":"<iso>","state_path":"/tmp/SCRUBBED","handoff":{"to":"ralplan","mode":"deliberate","state_path":"/tmp/SCRUBBED","run_id":"run-b"}}
 			"
 			`);
 

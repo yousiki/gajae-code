@@ -162,6 +162,8 @@ interface DeepInterviewSpecWriteSummary {
 	slug: string;
 	path: string;
 	sha256: string;
+	spec_path: string;
+	sha: string;
 	created_at: string;
 	state_path: string;
 	handoff?: {
@@ -512,6 +514,8 @@ async function handleSpecWrite(args: readonly string[], cwd: string): Promise<De
 		slug: persisted.slug,
 		path: persisted.path,
 		sha256: persisted.sha256,
+		spec_path: persisted.path,
+		sha: persisted.sha256,
 		created_at: persisted.createdAt,
 		state_path: persisted.statePath,
 	};

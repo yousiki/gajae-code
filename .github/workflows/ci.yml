@@ -78,6 +78,7 @@ jobs:
    # Branch protection must add the always-present `gjc-state-gates` status as required.
    gjc-state-gates:
       name: gjc-state-gates
+      if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       runs-on: [self-hosted, Linux, X64, gajae-layofflabs-2]
       timeout-minutes: 15
       env:
