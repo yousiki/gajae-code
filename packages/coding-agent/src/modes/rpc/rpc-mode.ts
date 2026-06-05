@@ -10,6 +10,7 @@
  * - Events: AgentSessionEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
+import * as path from "node:path";
 import { $env, readJsonl, Snowflake } from "@gajae-code/utils";
 import type {
 	ExtensionUIContext,
@@ -21,6 +22,9 @@ import type { AgentSession } from "../../session/agent-session";
 import { initializeExtensions } from "../runtime-init";
 import { dispatchRpcCommand } from "../shared/agent-wire/command-dispatch";
 import { rpcError as error } from "../shared/agent-wire/responses";
+import { defaultAuditPath, UnattendedAuditLog } from "../shared/agent-wire/unattended-audit";
+import { UnattendedSessionControlPlane } from "../shared/agent-wire/unattended-session";
+import { FileGateStore } from "../shared/agent-wire/workflow-gate-broker";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import type {
@@ -70,6 +74,15 @@ function shouldEmitRpcTitles(): boolean {
 	if (!raw) return false;
 	const normalized = raw.trim().toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function auditOutcomeFor(event: string): "accepted" | "rejected" | "denied" | "exceeded" | "aborted" | "info" {
+	if (event.includes("denied")) return "denied";
+	if (event.includes("exceeded")) return "exceeded";
+	if (event.includes("abort")) return "aborted";
+	if (event.includes("rejected") || event.includes("conflict")) return "rejected";
+	if (event.includes("accepted") || event.includes("negotiated") || event.includes("emitted")) return "accepted";
+	return "info";
 }
 
 export function requestRpcEditor(
@@ -159,6 +172,59 @@ export async function runRpcMode(
 	const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
+	const auditLog = new UnattendedAuditLog(defaultAuditPath(session.sessionId, session.sessionManager.getCwd()), {
+		redactAnswers: true,
+	});
+	const recordAudit = (event: { event: string; [key: string]: unknown }) => {
+		const payload =
+			typeof event.payload === "object" && event.payload !== null
+				? (event.payload as Record<string, unknown>)
+				: undefined;
+		const gateId =
+			typeof event.gate_id === "string"
+				? event.gate_id
+				: typeof payload?.gate_id === "string"
+					? payload.gate_id
+					: undefined;
+		auditLog.record({
+			run_id: session.sessionId,
+			session_id: session.sessionId,
+			actor: typeof event.actor === "string" ? event.actor : undefined,
+			event: event.event,
+			outcome: auditOutcomeFor(event.event),
+			dedupe_key: `${event.event}:${gateId ?? "run"}:${JSON.stringify(payload ?? event)}`,
+			gate_id: gateId,
+			stage: typeof event.stage === "string" ? (event.stage as never) : undefined,
+			kind: typeof event.kind === "string" ? (event.kind as never) : undefined,
+			scope: typeof payload?.scope === "string" ? payload.scope : undefined,
+			action: typeof payload?.action === "string" ? payload.action : undefined,
+			budget: event.event === "budget_exceeded" ? (payload as never) : undefined,
+			answer_hash: typeof event.answer_hash === "string" ? event.answer_hash : undefined,
+			error: payload && event.event.endsWith("denied") ? payload : undefined,
+		});
+	};
+	// Unattended control plane (#318/#319/#323/G011): routes negotiate_unattended +
+	// workflow_gate_response and lets skill runtimes emit gates over RPC.
+	const gateStore = new FileGateStore(
+		path.join(session.sessionManager.getCwd(), ".gjc", "state", "workflow-gates", `${session.sessionId}.json`),
+	);
+	const unattendedControlPlane = new UnattendedSessionControlPlane({
+		runId: session.sessionId,
+		sessionId: session.sessionId,
+		emitFrame: gate => output(gate),
+		store: gateStore,
+		audit: recordAudit,
+		getUsageSnapshot: () => {
+			const stats = session.getSessionStats();
+			return { tokens: stats.tokens.total, costUsd: stats.cost };
+		},
+	});
+	unattendedControlPlane
+		.recover()
+		.catch(err =>
+			output(error(undefined, "workflow_gate_recover", err instanceof Error ? err.message : String(err))),
+		);
+	session.setWorkflowGateEmitter(unattendedControlPlane);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -419,6 +485,7 @@ export async function runRpcMode(
 			hostToolRegistry: hostToolBridge,
 			hostUriRegistry: hostUriBridge,
 			createUiContext: () => new RpcExtensionUIContext(pendingExtensionRequests, output),
+			unattendedControlPlane,
 		});
 
 	/**
