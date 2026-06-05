@@ -38,8 +38,12 @@ import {
 	externalizeImageDataUrlSync,
 	isBlobRef,
 	isImageDataUrl,
+	MemoryBlobStore,
 	resolveImageData,
+	resolveImageDataSync,
 	resolveImageDataUrl,
+	resolveImageDataUrlSync,
+	resolveTextBlobSync,
 } from "./blob-store";
 import {
 	type BashExecutionMessage,
@@ -1073,6 +1077,30 @@ const TRUNCATION_NOTICE = "\n\n[Session persistence truncated large content]";
 /** Minimum base64 length to externalize to blob store (skip tiny inline images) */
 const BLOB_EXTERNALIZE_THRESHOLD = 1024;
 const TEXT_CONTENT_KEY = "content";
+const RESIDENT_BLOB_SENTINEL_KEY = "__gjcResidentBlob";
+type ResidentBlobKind = "text" | "imageUrl" | "imageData";
+interface ResidentBlobSentinel {
+	[RESIDENT_BLOB_SENTINEL_KEY]: true;
+	kind: ResidentBlobKind;
+	ref: string;
+}
+
+function residentBlobSentinel(kind: ResidentBlobKind, ref: string): ResidentBlobSentinel {
+	return { [RESIDENT_BLOB_SENTINEL_KEY]: true, kind, ref };
+}
+
+function isResidentBlobSentinel(value: unknown): value is ResidentBlobSentinel {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		(value as { [RESIDENT_BLOB_SENTINEL_KEY]?: unknown })[RESIDENT_BLOB_SENTINEL_KEY] === true &&
+		((value as { kind?: unknown }).kind === "text" ||
+			(value as { kind?: unknown }).kind === "imageUrl" ||
+			(value as { kind?: unknown }).kind === "imageData") &&
+		typeof (value as { ref?: unknown }).ref === "string" &&
+		isBlobRef((value as { ref: string }).ref)
+	);
+}
 
 /**
  * Recursively truncate large strings in an object for session persistence.
@@ -1104,6 +1132,133 @@ function isImageBlock(value: unknown): value is { type: "image"; data: string; m
 	);
 }
 
+const RESIDENT_EXTERNALIZE_STRING_EXCLUDED_KEYS = new Set([
+	"id",
+	"type",
+	"parentId",
+	"timestamp",
+	"role",
+	"provider",
+	"model",
+	"api",
+	"customType",
+	"mode",
+	"mimeType",
+	"stopReason",
+	"toolName",
+	"targetId",
+	"firstKeptEntryId",
+]);
+
+function shouldExternalizeResidentString(key: string | undefined): boolean {
+	return !key || !RESIDENT_EXTERNALIZE_STRING_EXCLUDED_KEYS.has(key);
+}
+
+function externalizeResidentValueSync(obj: unknown, blobStore: BlobStore, key?: string): unknown {
+	if (obj === null || obj === undefined) return obj;
+	if (typeof obj === "string") {
+		if (key === "image_url" && isImageDataUrl(obj) && obj.length >= BLOB_EXTERNALIZE_THRESHOLD)
+			return residentBlobSentinel("imageUrl", externalizeImageDataUrlSync(blobStore, obj));
+		if (shouldExternalizeResidentString(key) && obj.length >= BLOB_EXTERNALIZE_THRESHOLD)
+			return residentBlobSentinel("text", blobStore.putSync(Buffer.from(obj, "utf8")).ref);
+		return obj;
+	}
+	if (Array.isArray(obj)) {
+		let changed = false;
+		const result: unknown[] = new Array(obj.length);
+		for (let i = 0; i < obj.length; i++) {
+			const item = obj[i];
+			if (
+				key === TEXT_CONTENT_KEY &&
+				isImageBlock(item) &&
+				!isBlobRef(item.data) &&
+				item.data.length >= BLOB_EXTERNALIZE_THRESHOLD
+			) {
+				changed = true;
+				result[i] = {
+					...item,
+					data: residentBlobSentinel("imageData", externalizeImageDataSync(blobStore, item.data)),
+				};
+				continue;
+			}
+			const newItem = externalizeResidentValueSync(item, blobStore, key);
+			if (newItem !== item) changed = true;
+			result[i] = newItem;
+		}
+		return changed ? result : obj;
+	}
+	if (typeof obj === "object") {
+		let changed = false;
+		const entries: Array<readonly [string, unknown]> = [];
+		for (const [childKey, value] of Object.entries(obj)) {
+			const newValue = externalizeResidentValueSync(value, blobStore, childKey);
+			if (newValue !== value) changed = true;
+			entries.push([childKey, newValue]);
+		}
+		return changed ? Object.fromEntries(entries) : obj;
+	}
+	return obj;
+}
+
+function prepareEntryForResidentSync(entry: FileEntry, blobStore: BlobStore): FileEntry {
+	return externalizeResidentValueSync(entry, blobStore) as FileEntry;
+}
+
+function materializeResidentValueSync(
+	obj: unknown,
+	blobStore: BlobStore,
+	key?: string,
+	cache = new Map<string, string>(),
+): unknown {
+	if (obj === null || obj === undefined) return obj;
+	if (typeof obj === "string") return obj;
+	if (isResidentBlobSentinel(obj)) {
+		const cacheKey = `${obj.kind}:${obj.ref}`;
+		const cached = cache.get(cacheKey);
+		if (cached !== undefined) return cached;
+		const resolved =
+			obj.kind === "imageUrl"
+				? resolveImageDataUrlSync(blobStore, obj.ref)
+				: obj.kind === "imageData"
+					? resolveImageDataSync(blobStore, obj.ref)
+					: resolveTextBlobSync(blobStore, obj.ref);
+		cache.set(cacheKey, resolved);
+		return resolved;
+	}
+	if (Array.isArray(obj)) {
+		let changed = false;
+		const result = obj.map(item => {
+			const newItem = materializeResidentValueSync(item, blobStore, key, cache);
+			if (newItem !== item) changed = true;
+			return newItem;
+		});
+		return changed ? result : obj;
+	}
+	if (typeof obj === "object") {
+		let changed = false;
+		const entries = Object.entries(obj).map(([childKey, value]) => {
+			const newValue = materializeResidentValueSync(value, blobStore, childKey, cache);
+			if (newValue !== value) changed = true;
+			return [childKey, newValue] as const;
+		});
+		return changed ? Object.fromEntries(entries) : obj;
+	}
+	return obj;
+}
+
+function materializeResidentEntrySync<T extends FileEntry | SessionEntry>(
+	entry: T,
+	blobStore: BlobStore,
+	cache: Map<string, string>,
+): T {
+	return materializeResidentValueSync(entry, blobStore, undefined, cache) as T;
+}
+
+function materializeResidentEntriesSync<T extends FileEntry | SessionEntry>(entries: T[], blobStore: BlobStore): T[] {
+	const cache = new Map<string, string>();
+	return entries.map(entry => materializeResidentEntrySync(entry, blobStore, cache));
+}
+
 async function truncateForPersistence(obj: FileEntry, blobStore: BlobStore, key?: string): Promise<FileEntry>;
 async function truncateForPersistence(obj: string, blobStore: BlobStore, key?: string): Promise<string>;
 async function truncateForPersistence(obj: unknown[], blobStore: BlobStore, key?: string): Promise<unknown[]>;
@@ -1118,7 +1273,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 
 	if (typeof obj === "string") {
 		if (key === "image_url" && isImageDataUrl(obj)) {
-			return externalizeImageDataUrl(blobStore, obj);
+			return obj;
 		}
 
 		if (obj.length > MAX_PERSIST_CHARS) {
@@ -1139,15 +1294,6 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 		let changed = false;
 		const result = await Promise.all(
 			obj.map(async item => {
-				// Special handling: compress oversized images while preserving shape
-				if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-					if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
-						changed = true;
-						const blobRef = await externalizeImageData(blobStore, item.data);
-						return { ...item, data: blobRef };
-					}
-				}
-
 				const newItem = await truncateForPersistence(item, blobStore, key);
 				if (newItem !== item) changed = true;
 				return newItem;
@@ -1220,7 +1366,7 @@ function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: st
 
 	if (typeof obj === "string") {
 		if (key === "image_url" && isImageDataUrl(obj)) {
-			return externalizeImageDataUrlSync(blobStore, obj);
+			return obj;
 		}
 		if (obj.length > MAX_PERSIST_CHARS) {
 			if (key === "thinkingSignature" || key === "thoughtSignature" || key === "textSignature") {
@@ -1237,14 +1383,6 @@ function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: st
 		const result: unknown[] = new Array(obj.length);
 		for (let i = 0; i < obj.length; i++) {
 			const item = obj[i];
-			if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-				if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
-					changed = true;
-					const blobRef = externalizeImageDataSync(blobStore, item.data);
-					result[i] = { ...item, data: blobRef };
-					continue;
-				}
-			}
 			const newItem = truncateForPersistenceSync(item, blobStore, key);
 			if (newItem !== item) changed = true;
 			result[i] = newItem;
@@ -1429,6 +1567,13 @@ class NdjsonFileWriter {
 	/** True while the writer accepts new writes (not closing or closed). */
 	isOpen(): boolean {
 		return !this.#closed && !this.#closing;
+	}
+
+	closeSync(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#closing = true;
+		this.#writer.close().catch(() => {});
 	}
 }
 
@@ -1827,7 +1972,7 @@ export class SessionManager {
 		private readonly persist: boolean,
 		private readonly storage: SessionStorage,
 	) {
-		this.#blobStore = new BlobStore(getBlobsDir());
+		this.#blobStore = persist ? new BlobStore(getBlobsDir()) : new MemoryBlobStore();
 		if (persist && sessionDir) {
 			this.storage.ensureDirSync(sessionDir);
 		}
@@ -1901,7 +2046,7 @@ export class SessionManager {
 
 			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
 
-			await resolveBlobRefsInEntries(this.#fileEntries, this.#blobStore);
+			this.#fileEntries = this.#fileEntries.map(entry => prepareEntryForResidentSync(entry, this.#blobStore));
 			this.sanitizeLoadedOpenAIResponsesReplayMetadata();
 
 			this.#buildIndex();
@@ -2212,6 +2357,14 @@ export class SessionManager {
 		this.#persistWriterPath = undefined;
 	}
 
+	#closePersistWriterInternalSync(): void {
+		if (this.#persistWriter) {
+			this.#persistWriter.closeSync();
+			this.#persistWriter = undefined;
+		}
+		this.#persistWriterPath = undefined;
+	}
+
 	async #closePersistWriter(): Promise<void> {
 		await this.#queuePersistTask(
 			async () => {
@@ -2278,6 +2431,39 @@ export class SessionManager {
 			await this.#replaceSessionFileAfterEperm(tempPath, targetPath, err);
 		}
 	}
+
+	#replaceSessionFileSync(tempPath: string, targetPath: string): void {
+		try {
+			fs.renameSync(tempPath, targetPath);
+		} catch (err) {
+			try {
+				if (!hasFsCode(err, "EPERM") && !this.storage.existsSync(tempPath)) throw toError(err);
+				const tempContent = this.storage.readTextSync(tempPath);
+				this.storage.writeTextSync(targetPath, tempContent);
+				this.storage.unlink(tempPath).catch(() => {});
+			} catch (fallbackErr) {
+				throw toError(fallbackErr);
+			}
+		}
+	}
+
+	#writeEntriesAtomicallySync(entries: FileEntry[]): void {
+		if (!this.#sessionFile) return;
+		const dir = path.resolve(this.#sessionFile, "..");
+		const tempPath = path.join(dir, `.${path.basename(this.#sessionFile)}.${Snowflake.next()}.tmp`);
+		const writer = new NdjsonFileWriter(this.storage, tempPath, { flags: "w" });
+		try {
+			for (const entry of entries) {
+				writer.writeSync(entry);
+			}
+			writer.closeSync();
+			this.#replaceSessionFileSync(tempPath, this.#sessionFile);
+		} catch (err) {
+			writer.closeSync();
+			void this.storage.unlink(tempPath).catch(() => {});
+			throw toError(err);
+		}
+	}
 	async #writeEntriesAtomically(entries: FileEntry[]): Promise<void> {
 		if (!this.#sessionFile) return;
 		const dir = path.resolve(this.#sessionFile, "..");
@@ -2311,12 +2497,27 @@ export class SessionManager {
 		await this.#queuePersistTask(async () => {
 			await this.#closePersistWriterInternal();
 			const entries = await Promise.all(
-				this.#fileEntries.map(entry => prepareEntryForPersistence(entry, this.#blobStore)),
+				materializeResidentEntriesSync(this.#fileEntries, this.#blobStore).map(entry =>
+					prepareEntryForPersistence(entry, this.#blobStore),
+				),
 			);
 			await this.#writeEntriesAtomically(entries);
 			this.#needsFullRewriteOnNextPersist = false;
 			this.#flushed = true;
+			this.#ensuredOnDisk = true;
 		});
+	}
+
+	#rewriteFileSync(): void {
+		if (!this.persist || !this.#sessionFile) return;
+		this.#closePersistWriterInternalSync();
+		const entries = materializeResidentEntriesSync(this.#fileEntries, this.#blobStore).map(entry =>
+			prepareEntryForPersistenceSync(entry, this.#blobStore),
+		);
+		this.#writeEntriesAtomicallySync(entries);
+		this.#needsFullRewriteOnNextPersist = false;
+		this.#flushed = true;
+		this.#ensuredOnDisk = true;
 	}
 
 	isPersisted(): boolean {
@@ -2580,6 +2781,7 @@ export class SessionManager {
 			if (!hasAssistant) {
 				// Mark as not flushed so when assistant arrives, all entries get written.
 				this.#flushed = false;
+				this.#ensuredOnDisk = false;
 				return;
 			}
 		}
@@ -2590,7 +2792,12 @@ export class SessionManager {
 			// `#persistChain` → `#recordPersistError`; we swallow the rejection
 			// here to avoid an unhandled rejection when the persist dir races with
 			// test-level tempDir cleanup.
-			this.#rewriteFile().catch(() => {});
+			try {
+				this.#rewriteFileSync();
+			} catch (err) {
+				this.#recordPersistError(err);
+				throw this.#persistError ?? toError(err);
+			}
 			return;
 		}
 
@@ -2609,18 +2816,21 @@ export class SessionManager {
 				this.#rewriteFile().catch(() => {});
 				return;
 			}
-			const persistedEntry = prepareEntryForPersistenceSync(entry, this.#blobStore);
+			const materializedEntry = materializeResidentEntrySync(entry, this.#blobStore, new Map());
+			const persistedEntry = prepareEntryForPersistenceSync(materializedEntry, this.#blobStore);
 			writer.writeSync(persistedEntry);
 		} catch (err) {
 			this.#recordPersistError(err);
+			throw this.#persistError ?? toError(err);
 		}
 	}
 
 	#appendEntry(entry: SessionEntry): void {
-		this.#fileEntries.push(entry);
-		this.#byId.set(entry.id, entry);
-		this.#leafId = entry.id;
-		this._persist(entry);
+		const residentEntry = prepareEntryForResidentSync(entry, this.#blobStore) as SessionEntry;
+		this.#fileEntries.push(residentEntry);
+		this.#byId.set(residentEntry.id, residentEntry);
+		this.#leafId = residentEntry.id;
+		this._persist(residentEntry);
 		if (entry.type === "message" && entry.message.role === "assistant") {
 			const usage = entry.message.usage;
 			this.#usageStatistics.input += usage.input;
@@ -2894,7 +3104,9 @@ export class SessionManager {
 	}
 
 	getLeafEntry(): SessionEntry | undefined {
-		return this.#leafId ? this.#byId.get(this.#leafId) : undefined;
+		if (!this.#leafId) return undefined;
+		const entry = this.#byId.get(this.#leafId);
+		return entry ? materializeResidentEntrySync(entry, this.#blobStore, new Map()) : undefined;
 	}
 
 	/**
@@ -2913,17 +3125,19 @@ export class SessionManager {
 	}
 
 	getEntry(id: string): SessionEntry | undefined {
-		return this.#byId.get(id);
+		const entry = this.#byId.get(id);
+		return entry ? materializeResidentEntrySync(entry, this.#blobStore, new Map()) : undefined;
 	}
 
 	/**
 	 * Get all direct children of an entry.
 	 */
 	getChildren(parentId: string): SessionEntry[] {
+		const cache = new Map<string, string>();
 		const children: SessionEntry[] = [];
 		for (const entry of this.#byId.values()) {
 			if (entry.parentId === parentId) {
-				children.push(entry);
+				children.push(materializeResidentEntrySync(entry, this.#blobStore, cache));
 			}
 		}
 		return children;
@@ -2968,11 +3182,12 @@ export class SessionManager {
 	 * Use buildSessionContext() to get the resolved messages for the LLM.
 	 */
 	getBranch(fromId?: string): SessionEntry[] {
+		const cache = new Map<string, string>();
 		const path: SessionEntry[] = [];
 		const startId = fromId ?? this.#leafId;
 		let current = startId ? this.#byId.get(startId) : undefined;
 		while (current) {
-			path.unshift(current);
+			path.unshift(materializeResidentEntrySync(current, this.#blobStore, cache));
 			current = current.parentId ? this.#byId.get(current.parentId) : undefined;
 		}
 		return path;
@@ -2983,7 +3198,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildSessionContext(): SessionContext {
-		return buildSessionContext(this.getEntries(), this.#leafId, this.#byId);
+		return buildSessionContext(this.getEntries(), this.#leafId);
 	}
 
 	/** Strip stale OpenAI Responses assistant replay metadata from loaded in-memory entries. */
@@ -3020,7 +3235,10 @@ export class SessionManager {
 	 * change the leaf pointer. Entries cannot be modified or deleted.
 	 */
 	getEntries(): SessionEntry[] {
-		return this.#fileEntries.filter((e): e is SessionEntry => e.type !== "session");
+		return materializeResidentEntriesSync(
+			this.#fileEntries.filter((e): e is SessionEntry => e.type !== "session"),
+			this.#blobStore,
+		);
 	}
 
 	/**
@@ -3159,7 +3377,7 @@ export class SessionManager {
 			const lines: string[] = [];
 			lines.push(JSON.stringify(header));
 			for (const entry of pathWithoutLabels) {
-				lines.push(JSON.stringify(entry));
+				lines.push(JSON.stringify(prepareEntryForPersistenceSync(entry, this.#blobStore)));
 			}
 			// Write fresh label entries at the end
 			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
@@ -3174,13 +3392,17 @@ export class SessionManager {
 					targetId,
 					label,
 				};
-				lines.push(JSON.stringify(labelEntry));
+				lines.push(JSON.stringify(prepareEntryForPersistenceSync(labelEntry, this.#blobStore)));
 				pathEntryIds.add(labelEntry.id);
 				labelEntries.push(labelEntry);
 				parentId = labelEntry.id;
 			}
 			this.storage.writeTextSync(newSessionFile, `${lines.join("\n")}\n`);
-			this.#fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			this.#fileEntries = [
+				header,
+				...pathWithoutLabels.map(entry => prepareEntryForResidentSync(entry, this.#blobStore) as SessionEntry),
+				...labelEntries,
+			];
 			this.#sessionId = newSessionId;
 			this.#sessionFile = newSessionFile;
 			this.#flushed = true;
@@ -3203,7 +3425,11 @@ export class SessionManager {
 			labelEntries.push(labelEntry);
 			parentId = labelEntry.id;
 		}
-		this.#fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+		this.#fileEntries = [
+			header,
+			...pathWithoutLabels.map(entry => prepareEntryForResidentSync(entry, this.#blobStore) as SessionEntry),
+			...labelEntries,
+		];
 		this.#sessionId = newSessionId;
 		this.#buildIndex();
 		return undefined;
@@ -3246,9 +3472,9 @@ export class SessionManager {
 		const manager = new SessionManager(cwd, dir, true, storage);
 		const forkEntries = structuredClone(await loadEntriesFromFile(sourcePath, storage)) as FileEntry[];
 		migrateToCurrentVersion(forkEntries);
-		await resolveBlobRefsInEntries(forkEntries, manager.#blobStore);
-		const sourceHeader = forkEntries.find(e => e.type === "session") as SessionHeader | undefined;
-		const historyEntries = forkEntries.filter(entry => entry.type !== "session") as SessionEntry[];
+		manager.#fileEntries = forkEntries.map(entry => prepareEntryForResidentSync(entry, manager.#blobStore));
+		const sourceHeader = manager.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
+		const historyEntries = manager.#fileEntries.filter(entry => entry.type !== "session") as SessionEntry[];
 		manager.#newSessionSync({ parentSession: sourceHeader?.id });
 		const newHeader = manager.#fileEntries[0] as SessionHeader;
 		newHeader.title = sourceHeader?.title;
