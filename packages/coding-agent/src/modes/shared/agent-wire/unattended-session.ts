@@ -15,6 +15,7 @@
  * RPC server can route `negotiate_unattended` + `workflow_gate_response` here.
  */
 import type {
+	RpcCommand,
 	RpcUnattendedAccepted,
 	RpcUnattendedDeclaration,
 	RpcWorkflowGate,
@@ -22,6 +23,7 @@ import type {
 	RpcWorkflowGateResponse,
 } from "../../rpc/rpc-types";
 import type { RpcUnattendedControlPlane } from "./command-dispatch";
+import { scopeForRpcCommand } from "./scopes";
 import {
 	type UnattendedAbortHooks,
 	type UnattendedAuditEvent,
@@ -49,6 +51,8 @@ export interface UnattendedSessionOptions {
 	abortHooks?: UnattendedAbortHooks;
 	/** Whether the active provider reports token/cost usage (fail-closed when false/omitted). */
 	providerSupportsTokenCostMetrics?: boolean;
+	/** Snapshot live cumulative usage after a dispatch or turn, for budget reconciliation. */
+	getUsageSnapshot?: () => { tokens?: number; costUsd?: number };
 }
 
 export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane, WorkflowGateEmitter {
@@ -84,6 +88,7 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 		});
 		this.#controller = controller;
 		this.#broker = new WorkflowGateBroker(this.opts.runId, this.opts.store ?? new MemoryGateStore(), {
+			emit: gate => this.opts.emitFrame(gate),
 			audit: e => this.opts.audit?.(e),
 			advance: (gate, answer) => {
 				const pending = this.#pending.get(gate.gate_id);
@@ -103,6 +108,36 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 		};
 	}
 
+	preflightCommand(command: RpcCommand): void {
+		if (!this.#controller) return;
+		this.#controller.preflightToolCall(`${command.type} preflight`);
+		if (command.type === "bash") {
+			this.#controller.authorizeBash(command.command);
+			return;
+		}
+		const scope = scopeForRpcCommand(command.type);
+		this.#controller.authorizeScope(scope);
+		this.#controller.authorizeAction(UnattendedRunController.actionClassForScope(scope));
+	}
+
+	reconcileUsage(phase = "unattended usage reconciliation"): void {
+		const controller = this.#controller;
+		if (!controller) return;
+		controller.checkWallTime(phase);
+		const snapshot = this.opts.getUsageSnapshot?.();
+		if (!snapshot) return;
+		const current = controller.usageSnapshot();
+		const tokens = snapshot.tokens;
+		const costUsd = snapshot.costUsd;
+		controller.reconcile(
+			{
+				tokens: tokens !== undefined ? Math.max(0, tokens - current.tokens) : undefined,
+				costUsd: costUsd !== undefined ? Math.max(0, costUsd - current.costUsd) : undefined,
+			},
+			phase,
+		);
+	}
+
 	resolveGate(response: RpcWorkflowGateResponse): Promise<RpcWorkflowGateResolution> {
 		if (!this.#broker) {
 			return Promise.reject(new Error("workflow gates are not available until unattended mode is negotiated"));
@@ -115,11 +150,13 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 			return Promise.reject(new Error("cannot emit a workflow gate before unattended mode is negotiated"));
 		}
 		const gate = this.#broker.openGate(input);
-		const promise = new Promise<unknown>((resolve, reject) => {
+		return new Promise<unknown>((resolve, reject) => {
 			this.#pending.set(gate.gate_id, { resolve, reject });
 		});
-		this.opts.emitFrame(gate);
-		return promise;
+	}
+
+	async recover(): Promise<void> {
+		await this.#broker?.recover();
 	}
 
 	#rejectAllPending(error: Error): void {

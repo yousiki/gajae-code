@@ -16,6 +16,13 @@ import type {
 	RpcWorkflowGateResponse,
 } from "../../rpc/rpc-types";
 import { rpcError, rpcSuccess } from "./responses";
+import {
+	ActionDeniedError,
+	ScopeDeniedError,
+	UnattendedBudgetExceededError,
+	UnattendedNegotiationError,
+} from "./unattended-run-controller";
+import { WorkflowGateBrokerError } from "./workflow-gate-broker";
 
 export type RpcCommandDispatchOutput = (obj: RpcResponse | RpcExtensionUIRequest | object) => void;
 
@@ -37,6 +44,9 @@ export interface RpcUnattendedControlPlane {
 	negotiate(declaration: RpcUnattendedDeclaration): RpcUnattendedAccepted;
 	/** Resolve a pending workflow gate with the agent's answer. */
 	resolveGate(response: RpcWorkflowGateResponse): Promise<RpcWorkflowGateResolution>;
+	isUnattended?(): boolean;
+	preflightCommand?(command: RpcCommand): void;
+	reconcileUsage?(phase?: string): void;
 }
 
 export interface RpcCommandDispatchContext {
@@ -72,12 +82,50 @@ export function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): Rp
 	});
 }
 
+function serializeRpcDispatchError(err: unknown): string | object {
+	if (
+		err instanceof ScopeDeniedError ||
+		err instanceof ActionDeniedError ||
+		err instanceof UnattendedBudgetExceededError
+	) {
+		return err.payload;
+	}
+	if (err instanceof UnattendedNegotiationError) {
+		return { code: err.code, message: err.message };
+	}
+	if (err instanceof WorkflowGateBrokerError) {
+		return { code: err.code, message: err.message };
+	}
+	return err instanceof Error ? err.message : String(err);
+}
+
 export async function dispatchRpcCommand(
 	command: RpcCommand,
 	context: RpcCommandDispatchContext,
 ): Promise<RpcResponse> {
 	const { session, output, hostToolRegistry, hostUriRegistry, createUiContext, unattendedControlPlane } = context;
 	const id = command.id;
+	const typedError = (cmd: string, err: unknown): RpcResponse => rpcError(id, cmd, serializeRpcDispatchError(err));
+	const preflight = (): RpcResponse | undefined => {
+		if (!unattendedControlPlane?.isUnattended?.() || command.type === "negotiate_unattended") return undefined;
+		try {
+			unattendedControlPlane.preflightCommand?.(command);
+			return undefined;
+		} catch (err) {
+			return typedError(command.type, err);
+		}
+	};
+	const reconcile = (phase = `${command.type} post-dispatch`): RpcResponse | undefined => {
+		if (!unattendedControlPlane?.isUnattended?.()) return undefined;
+		try {
+			unattendedControlPlane.reconcileUsage?.(phase);
+			return undefined;
+		} catch (err) {
+			return typedError(command.type, err);
+		}
+	};
+	const denied = preflight();
+	if (denied) return denied;
 
 	switch (command.type) {
 		case "prompt": {
@@ -86,8 +134,8 @@ export async function dispatchRpcCommand(
 					images: command.images,
 					streamingBehavior: command.streamingBehavior,
 				})
-				.catch(e => output(rpcError(id, "prompt", e.message)));
-			return rpcSuccess(id, "prompt");
+				.catch(e => output(rpcError(id, "prompt", serializeRpcDispatchError(e))));
+			return reconcile() ?? rpcSuccess(id, "prompt");
 		}
 
 		case "steer": {
@@ -240,7 +288,7 @@ export async function dispatchRpcCommand(
 
 		case "bash": {
 			const result = await session.executeBash(command.command);
-			return rpcSuccess(id, "bash", result);
+			return reconcile() ?? rpcSuccess(id, "bash", result);
 		}
 
 		case "abort_bash": {
@@ -358,7 +406,7 @@ export async function dispatchRpcCommand(
 				const accepted = unattendedControlPlane.negotiate(command.declaration);
 				return rpcSuccess(id, "negotiate_unattended", accepted);
 			} catch (err) {
-				return rpcError(id, "negotiate_unattended", err instanceof Error ? err.message : String(err));
+				return typedError("negotiate_unattended", err);
 			}
 		}
 
@@ -374,7 +422,7 @@ export async function dispatchRpcCommand(
 				});
 				return rpcSuccess(id, "workflow_gate_response", resolution);
 			} catch (err) {
-				return rpcError(id, "workflow_gate_response", err instanceof Error ? err.message : String(err));
+				return typedError("workflow_gate_response", err);
 			}
 		}
 

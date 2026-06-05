@@ -94,4 +94,11 @@ export interface BridgeCommandHelpers {
 	getMessages(sessionId: string, options?: BridgeCommandOptions): Promise<unknown>;
 	getLoginProviders(sessionId: string, options?: BridgeCommandOptions): Promise<unknown>;
 	login(sessionId: string, providerId: string, options?: BridgeCommandOptions): Promise<unknown>;
+	respondGate(
+		sessionId: string,
+		gateId: string,
+		ownerToken: string,
+		answer: unknown,
+		options?: BridgeCommandOptions,
+	): Promise<unknown>;
 }

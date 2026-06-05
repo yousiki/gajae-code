@@ -226,7 +226,7 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail)
-	| { id?: string; type: "response"; command: string; success: false; error: string };
+	| { id?: string; type: "response"; command: string; success: false; error: string | object };
 
 // ============================================================================
 // Extension UI Events (stdout)

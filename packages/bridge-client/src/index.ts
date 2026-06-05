@@ -5,7 +5,7 @@ export * from "./commands";
 export * from "./reference-consumer";
 export * from "./workflow-gate";
 
-import type { UnattendedDeclaration, WorkflowGate, WorkflowGateResolver, WorkflowGateResponse } from "./workflow-gate";
+import type { UnattendedDeclaration, WorkflowGate, WorkflowGateResolver } from "./workflow-gate";
 import { isWorkflowGateFrame } from "./workflow-gate";
 export type BridgeCapability =
 	| "events"
@@ -431,19 +431,23 @@ export class BridgeClient implements BridgeCommandHelpers {
 	}
 
 	/**
-	 * Answer a `workflow_gate` by posting a `workflow_gate_response` through the
-	 * owner-token ui-response flow (the gate_id is the correlation id). #322.
+	 * Answer a `workflow_gate` by sending `workflow_gate_response` through the
+	 * live command broker/control plane. #322.
 	 */
 	respondGate(
 		sessionId: string,
 		gateId: string,
-		ownerToken: string,
+		_ownerToken: string,
 		answer: unknown,
-		options: { idempotencyKey?: string } = {},
+		options: { idempotencyKey?: string; id?: string } = {},
 	): Promise<unknown> {
-		const response: WorkflowGateResponse = { gate_id: gateId, answer };
-		if (options.idempotencyKey) response.idempotency_key = options.idempotencyKey;
-		return this.respondToUiRequest(sessionId, gateId, ownerToken, response, options.idempotencyKey);
+		return this.#command(
+			"workflow_gate_response",
+			sessionId,
+			{ gate_id: gateId, answer, idempotency_key: options.idempotencyKey },
+			{ id: options.id, idempotencyKey: options.idempotencyKey },
+			"workflow-gate-response",
+		);
 	}
 
 	/**

@@ -52,6 +52,8 @@ export interface BridgeHandshakeAccepted {
 	frame_types: BridgeFrameType[];
 	/** Echoed unattended declaration when one was supplied and accepted (#321). */
 	accepted_unattended?: RpcUnattendedDeclaration;
+	/** Server-side accepted unattended mode after live negotiation, not just declaration echo. */
+	unattended_active?: boolean;
 }
 
 export interface BridgeHandshakeRejected {
@@ -118,6 +120,7 @@ export function negotiateBridgeHandshake(
 		scopes: readonly BridgeCommandScope[];
 		endpoints: BridgeEndpointDescriptor;
 		frameTypes: readonly BridgeFrameType[];
+		acceptedUnattended?: RpcUnattendedDeclaration;
 	},
 ): BridgeHandshakeResponse {
 	if (
@@ -146,10 +149,9 @@ export function negotiateBridgeHandshake(
 		endpoints: server.endpoints,
 		frame_types: [...server.frameTypes],
 	};
-	// Echo the unattended declaration only when the workflow_gate capability was
-	// accepted (the gate transport is what carries the unattended lifecycle).
-	if (request.unattended !== undefined && acceptedSet.has("workflow_gate")) {
-		accepted.accepted_unattended = request.unattended;
+	if (server.acceptedUnattended !== undefined && acceptedSet.has("workflow_gate")) {
+		accepted.accepted_unattended = server.acceptedUnattended;
+		accepted.unattended_active = true;
 	}
 	return accepted;
 }

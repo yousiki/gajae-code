@@ -108,12 +108,12 @@ describe("workflow_gate red-team negotiation", () => {
 		expect(res.accepted_unattended).toBeUndefined();
 	});
 
-	it("accepts workflow_gate and echoes unattended when offered and requested", () => {
+	it("accepts workflow_gate without echoing inactive unattended", () => {
 		const res = negotiateBridgeHandshake(request({ unattended: decl }), server()) as BridgeHandshakeAccepted;
 		expect(res.status).toBe("accepted");
 		expect(res.accepted_capabilities).toContain("workflow_gate");
 		expect(res.frame_types).toContain("workflow_gate");
-		expect(res.accepted_unattended).toEqual(decl);
+		expect(res.accepted_unattended).toBeUndefined();
 	});
 
 	it("still rejects incompatible protocol versions", () => {
@@ -164,7 +164,7 @@ describe("workflow_gate red-team over the wire", () => {
 			const response = res.body as BridgeHandshakeAccepted;
 			expect(response.accepted_capabilities).toContain("workflow_gate");
 			expect(response.frame_types).toContain("workflow_gate");
-			if ("unattended" in body) expect(response.accepted_unattended).toEqual(decl);
+			if ("unattended" in body) expect(response.accepted_unattended).toBeUndefined();
 		}
 	});
 });

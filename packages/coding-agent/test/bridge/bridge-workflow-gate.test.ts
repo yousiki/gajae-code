@@ -43,7 +43,7 @@ function serverArgs() {
 }
 
 describe("bridge handshake advertises workflow_gate (#321)", () => {
-	it("accepts the workflow_gate capability + frame type and echoes the unattended declaration", () => {
+	it("accepts the workflow_gate capability + frame type without claiming inactive unattended", () => {
 		const request: BridgeHandshakeRequest = {
 			protocol_version_range: { min: 1, max: 1 },
 			capabilities: ["events", "workflow_gate"],
@@ -54,7 +54,7 @@ describe("bridge handshake advertises workflow_gate (#321)", () => {
 		expect(res.status).toBe("accepted");
 		expect(res.accepted_capabilities).toContain("workflow_gate");
 		expect(res.frame_types).toContain("workflow_gate");
-		expect(res.accepted_unattended).toEqual(decl);
+		expect(res.accepted_unattended).toBeUndefined();
 	});
 
 	it("does not echo the declaration when workflow_gate is not accepted", () => {
