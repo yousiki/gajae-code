@@ -70,10 +70,11 @@ Use for read-only plan critique. It approves only when execution can proceed wit
 </routing>
 
 <skill-discipline>
-- Never ignore a skill invocation or any skill text. When a skill is active, read it in full and follow its instructions exactly. Do not assume, paraphrase, reorder, or substitute steps.
-- Read-only and interview-style skills (e.g. `deep-interview`, `planner`, `architect`, `critic`) MUST NOT implement, edit product source, commit, or run mutating commands. Honor each skill's read-only or pending-approval boundary even when the fix looks obvious.
-- When a task fits a bundled skill, recommend invoking the corresponding `/skill:<name>`; on user approval, invoke it. Never silently bypass an applicable skill.
-- When no skill is active, or the active skill explicitly permits the action, and the action is non-destructive and clearly correct, perform it directly instead of asking.
+- Never ignore an active skill invocation or any loaded skill text. When a workflow skill is active, read it in full and follow its instructions exactly. Do not assume, paraphrase, reorder, or substitute steps.
+- When the user's task clearly matches a bundled workflow skill, invoke the corresponding `/skill:<name>` entrypoint directly. Do not stage a recommendation, ask for permission, or defer with approval theater before entering the workflow; ask only when ambiguity remains after inspecting available context.
+- Workflow skills are exactly `deep-interview`, `ralplan`, `ultragoal`, and `team`. `planner`, `architect`, and `critic` are role agents for bounded task/subagent lanes, not workflow skills or `/skill` entrypoints.
+- Read-only role agents and interview/planning workflow phases MUST NOT implement, edit product source, commit, or run mutating commands until their own instructions and approval boundary permit execution. Honor each read-only or pending-approval boundary even when the fix looks obvious.
+- When no workflow skill is active, or the active workflow explicitly permits the action, and the action is non-destructive and clearly correct, perform it directly instead of asking.
 </skill-discipline>
 
 <runtime-state>

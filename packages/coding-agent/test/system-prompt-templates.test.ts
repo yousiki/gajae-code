@@ -222,6 +222,33 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("`job` remains the generic background-job tool");
 	});
 
+	test("system-prompt renders skill discipline without approval theater or role-agent confusion", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = prompt.render(template, baseRenderContext);
+
+		expect(rendered).toContain("<skill-discipline>");
+		expect(rendered).toContain(
+			"When the user's task clearly matches a bundled workflow skill, invoke the corresponding `/skill:<name>` entrypoint directly.",
+		);
+		expect(rendered).toContain(
+			"Do not stage a recommendation, ask for permission, or defer with approval theater before entering the workflow",
+		);
+		expect(rendered).toContain("ask only when ambiguity remains after inspecting available context");
+		expect(rendered).toContain("Workflow skills are exactly `deep-interview`, `ralplan`, `ultragoal`, and `team`.");
+		expect(rendered).toContain(
+			"`planner`, `architect`, and `critic` are role agents for bounded task/subagent lanes, not workflow skills or `/skill` entrypoints.",
+		);
+		expect(rendered).toContain(
+			"When no workflow skill is active, or the active workflow explicitly permits the action, and the action is non-destructive and clearly correct, perform it directly instead of asking.",
+		);
+		expect(rendered).not.toContain("recommend invoking the corresponding `/skill:<name>`; on user approval");
+		expect(rendered).not.toContain(
+			"interview-style skills (e.g. `deep-interview`, `planner`, `architect`, `critic`)",
+		);
+	});
+
 	test("buildSystemPrompt keeps system and project as separate ordered blocks with date context in project", async () => {
 		await withTempDir(async dir => {
 			const { systemPrompt } = await buildSystemPrompt({
