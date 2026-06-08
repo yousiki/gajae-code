@@ -2,7 +2,7 @@ import * as path from "node:path";
 import type { SkillDiscoverySettings } from "../config/skill-settings-defaults";
 import { ModeStateSchema, SkillActiveStateSchema } from "../gjc-runtime/state-schema";
 import { writeJsonAtomic, writeWorkflowEnvelopeAtomic } from "../gjc-runtime/state-writer";
-import { isUltragoalBypassPrompt, readUltragoalVerificationState } from "../gjc-runtime/ultragoal-guard";
+import { isUltragoalBypassPrompt, readUltragoalRunCompletionState } from "../gjc-runtime/ultragoal-guard";
 import { buildSessionContext, loadEntriesFromFile, type SessionEntry } from "../session/session-manager";
 import {
 	readVisibleSkillActiveState as readCanonicalVisibleSkillActiveState,
@@ -544,7 +544,7 @@ export async function buildActiveUltragoalPromptContext(input: UserPromptSubmitS
 			return "BLOCK_ULTRAGOAL_COMPLETION: Active Ultragoal completion is blocked until a current GJC goal objective can be verified. Use durable blocker work or run strict `gjc ultragoal checkpoint --status complete --quality-gate-json <file> --gjc-goal-json <file>` before completion.";
 		}
 		for (const objective of objectives) {
-			const diagnostic = await readUltragoalVerificationState({
+			const diagnostic = await readUltragoalRunCompletionState({
 				cwd: input.cwd,
 				currentGoal: { objective },
 			});
@@ -584,7 +584,7 @@ export async function buildSkillStopOutput(input: StopHookInput): Promise<Record
 						? modeState.gjcObjective
 						: "");
 			if (objective) {
-				const diagnostic = await readUltragoalVerificationState({
+				const diagnostic = await readUltragoalRunCompletionState({
 					cwd: input.cwd,
 					currentGoal: { objective },
 				});

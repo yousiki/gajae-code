@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { reconcileWorkflowSkillState } from "@gajae-code/coding-agent/gjc-runtime/state-runtime";
 import {
 	assertCanCompleteCurrentGoal,
+	readUltragoalVerificationState,
 	validateCompletionReceipt,
 } from "@gajae-code/coding-agent/gjc-runtime/ultragoal-guard";
 import {
@@ -611,6 +612,61 @@ describe("native GJC ultragoal runtime", () => {
 
 		expect(plan.goals[1]).toMatchObject({ id: "G002", status: "active" });
 		expect(diagnostic.state).toBe("active_verified_complete");
+	});
+
+	it("reports active_verified_complete for a verified current story while a required goal stays pending", async () => {
+		const root = await tempDir();
+		const created = await createUltragoalPlan({ cwd: root, brief: "Ship the fix", gjcGoalMode: "per-story" });
+		await addUltragoalSubgoal({
+			cwd: root,
+			title: "Second stage",
+			objective: "Complete the second stage.",
+			evidence: "The regression requires a second required goal.",
+			rationale: "Cover stage continuation after the first story verifies.",
+		});
+		await startNextUltragoalGoal({ cwd: root });
+		const storyObjective = created.goals[0]?.objective;
+		if (!storyObjective) throw new Error("missing story objective");
+
+		await checkpointUltragoalGoal({
+			cwd: root,
+			goalId: "G001",
+			status: "complete",
+			evidence: "tests passed",
+			gjcGoalJson: goalSnapshot(storyObjective),
+			qualityGateJson: passingQualityGate(),
+		});
+
+		const plan = await readUltragoalPlan(root);
+		if (!plan) throw new Error("missing ultragoal plan");
+		expect(plan.goals[0]).toMatchObject({ id: "G001", status: "complete" });
+		expect(plan.goals[1]?.id).toBe("G002");
+		expect(["pending", "active"]).toContain(plan.goals[1]?.status);
+
+		const diagnostic = await readUltragoalVerificationState({
+			cwd: root,
+			currentGoal: { objective: storyObjective, status: "active" },
+		});
+		expect(diagnostic.state).toBe("active_verified_complete");
+
+		await expect(
+			assertCanCompleteCurrentGoal({
+				cwd: root,
+				currentGoal: { objective: storyObjective, status: "active" },
+			}),
+		).resolves.toBeUndefined();
+
+		const aggregateDiagnostic = await readUltragoalVerificationState({
+			cwd: root,
+			currentGoal: { objective: created.gjcObjective, status: "active" },
+		});
+		expect(aggregateDiagnostic.state).not.toBe("active_verified_complete");
+		await expect(
+			assertCanCompleteCurrentGoal({
+				cwd: root,
+				currentGoal: { objective: created.gjcObjective, status: "active" },
+			}),
+		).rejects.toThrow();
 	});
 
 	it("treats receipts as stale after target goal mutation", async () => {

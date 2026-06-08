@@ -268,7 +268,7 @@ export async function readUltragoalVerificationState(input: {
 		receiptKind: receiptTarget.receiptKind,
 	});
 	if (receiptDiagnostic.state !== "active_verified_complete") return receiptDiagnostic;
-	if (runState.incompleteGoals.length > 0) {
+	if (receiptTarget.receiptKind === "final-aggregate" && runState.incompleteGoals.length > 0) {
 		return {
 			state: "active_missing_final_receipt",
 			message: `Ultragoal still has incomplete required goals: ${runState.incompleteGoals.map(goal => goal.id).join(", ")}. Run \`gjc ultragoal complete-goals\` to continue.`,
@@ -288,6 +288,36 @@ export async function assertCanCompleteCurrentGoal(input: {
 	throw new Error(
 		`${diagnostic.message} Run strict \`gjc ultragoal checkpoint --status complete --quality-gate-json <file> --gjc-goal-json <file>\` first, or record review blockers and rerun verification.`,
 	);
+}
+
+
+// Run-level guard for stop/whole-run-completion hooks. A fresh per-goal receipt
+// means the *current story* is verified, but it must not be treated as durable
+// run completion while other required goals remain incomplete. This keeps stop
+// and goal({"op":"complete"}) blocked across a multi-stage Ultragoal run while
+// still letting per-story verification report active_verified_complete.
+export async function readUltragoalRunCompletionState(input: {
+	cwd: string;
+	currentGoal?: CurrentGoalLike | null;
+}): Promise<UltragoalGuardDiagnostic> {
+	const diagnostic = await readUltragoalVerificationState(input);
+	if (diagnostic.state !== "active_verified_complete") return diagnostic;
+	let plan: UltragoalPlan | null;
+	try {
+		plan = await readUltragoalPlan(input.cwd);
+	} catch {
+		return diagnostic;
+	}
+	if (!plan) return diagnostic;
+	const runState = getUltragoalRunCompletionState(plan);
+	if (runState.incompleteGoals.length > 0) {
+		return {
+			state: "active_missing_final_receipt",
+			message: `Ultragoal still has incomplete required goals: ${runState.incompleteGoals.map(goal => goal.id).join(", ")}. Run \`gjc ultragoal complete-goals\` to continue.`,
+			goalId: diagnostic.goalId,
+		};
+	}
+	return diagnostic;
 }
 
 export function isUltragoalBypassPrompt(prompt: string): boolean {
