@@ -5,6 +5,8 @@
 ### Added
 
 - Added a dim `(ctrl+s to observe sessions)` discoverability hint under the `subagent` await panel header while any awaited subagent is still running, pointing to the full session observer overlay; the hint shows in both collapsed and expanded states and disappears once no subagent is running.
+- Added an advisory spawn-ROI reconciliation module (`reconcileSpawnRoi`): compares the spawn-plan `maxInlineTokens` promise against each child receipt's actual inline-token proxy and surfaces a deterministic `SpawnRoiReconciliation` (per-child overage, lowRoi ids, advisory flags) as optional `TaskToolDetails.roiReconciliation`; advisory-only, never changes task success semantics.
+- Added a deterministic fork-context mode advisory (`adviseForkContextMode`): recommends `none`/`receipt`/`last-turn` from assignment-text dependence signals with parent-capped per-mode cloned-token estimates, never overrides an explicit caller mode, and is surfaced receipt-visible-only as `TaskResultReceipt.forkContextAdvisory` (no change to actual mode selection).
 
 ### Fixed
 

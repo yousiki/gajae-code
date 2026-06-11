@@ -47,6 +47,7 @@ import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { discoverAgents, filterVisibleAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
+import { adviseForkContextMode } from "./fork-context-advisory";
 import { getTaskIdValidationError, validateAllocatedTaskId } from "./id";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
@@ -1293,6 +1294,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				const forkContext = requestsForkContext(task)
 					? { mode: task.inheritContext, clonedTokens: forkContextSeed?.metadata.approximateTokens ?? 0 }
 					: undefined;
+				// Advisory-only recommendation (logged on the receipt); never overrides
+				// the caller's explicit inheritContext mode.
+				const advisory = adviseForkContextMode({
+					assignment: task.assignment,
+					context: sharedContext,
+					explicitMode: task.inheritContext,
+				});
+				const forkContextAdvisory = {
+					recommendedMode: advisory.recommendedMode,
+					reasons: advisory.reasons,
+				};
 				const taskSessionFile = overrides?.sessionFile ?? executionOverrides?.sessionFiles?.get(task.id) ?? null;
 				if (!isIsolated) {
 					const result = await runSubprocess({
@@ -1341,7 +1353,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						parentTelemetry: this.session.getTelemetry?.(),
 						forkContextSeed,
 					});
-					return forkContext ? { ...result, forkContext } : result;
+					return { ...result, ...(forkContext ? { forkContext } : {}), forkContextAdvisory };
 				}
 
 				const taskStart = Date.now();
@@ -1402,7 +1414,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						parentTelemetry: this.session.getTelemetry?.(),
 						forkContextSeed,
 					});
-					const resultWithForkContext = forkContext ? { ...result, forkContext } : result;
+					const resultWithForkContext = {
+						...result,
+						...(forkContext ? { forkContext } : {}),
+						forkContextAdvisory,
+					};
 					if (mergeMode === "branch" && resultWithForkContext.exitCode === 0) {
 						try {
 							const commitMsg =
