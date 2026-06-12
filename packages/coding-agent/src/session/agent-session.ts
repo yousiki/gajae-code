@@ -865,6 +865,7 @@ export class AgentSession {
 
 	#scopedModels: ScopedModelSelection[];
 	#thinkingLevel: ThinkingLevel | undefined;
+	#activeModelProfile: string | undefined;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
 
@@ -5732,6 +5733,14 @@ export class AgentSession {
 		// configured defaultLevel; otherwise preserve the current level.
 		this.setThinkingLevel(model.thinking?.defaultLevel ?? this.thinkingLevel);
 		await this.#syncEditToolModeAfterModelChange(previousEditMode);
+	}
+
+	setActiveModelProfile(name: string | undefined): void {
+		this.#activeModelProfile = name;
+	}
+
+	getActiveModelProfile(): string | undefined {
+		return this.#activeModelProfile;
 	}
 
 	/**
