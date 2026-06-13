@@ -62,6 +62,10 @@ from .protocol import (
     TurnStartEvent,
     UnknownNotification,
     WorkflowGate,
+    HandoffResult,
+    LoginProvider,
+    UnattendedAccepted,
+    UnattendedBudget,
     assistant_text,
     parse_agent_messages,
     parse_bash_result,
@@ -69,6 +73,8 @@ from .protocol import (
     parse_branch_result,
     parse_cancellation_result,
     parse_compaction_result,
+    parse_login_provider,
+    parse_unattended_accepted,
     parse_model_cycle_result,
     parse_model_info,
     parse_notification,
@@ -819,6 +825,51 @@ class RpcClient:
     def get_messages(self) -> tuple[AgentMessage, ...]:
         payload = self._request("get_messages")
         return parse_agent_messages(cast(JsonValue | None, payload.get("messages")))
+
+    def negotiate_unattended(
+        self,
+        *,
+        actor: str,
+        budget: UnattendedBudget,
+        scopes: Sequence[str],
+        action_allowlist: Sequence[str],
+    ) -> UnattendedAccepted:
+        payload = self._request(
+            "negotiate_unattended",
+            declaration=cast(
+                JsonValue,
+                {
+                    "actor": actor,
+                    "budget": {
+                        "max_tokens": budget.max_tokens,
+                        "max_tool_calls": budget.max_tool_calls,
+                        "max_wall_time_ms": budget.max_wall_time_ms,
+                        "max_cost_usd": budget.max_cost_usd,
+                    },
+                    "scopes": list(scopes),
+                    "action_allowlist": list(action_allowlist),
+                },
+            ),
+        )
+        return parse_unattended_accepted(payload)
+
+    def handoff(self, custom_instructions: str | None = None) -> HandoffResult | None:
+        payload = self._request("handoff", customInstructions=custom_instructions)
+        if not payload:
+            return None
+        saved = payload.get("savedPath")
+        return HandoffResult(saved_path=saved if isinstance(saved, str) else None)
+
+    def get_login_providers(self) -> tuple[LoginProvider, ...]:
+        payload = self._request("get_login_providers")
+        providers = payload.get("providers")
+        if not isinstance(providers, list):
+            return ()
+        return tuple(parse_login_provider(cast(JsonObject, item)) for item in providers)
+
+    def login(self, provider_id: str) -> str:
+        payload = self._request("login", providerId=provider_id)
+        return str(payload.get("providerId", provider_id))
 
     def set_custom_tools(self, tools: Sequence[HostTool[Any, Any]]) -> tuple[str, ...]:
         self._custom_tools = tuple(tools)

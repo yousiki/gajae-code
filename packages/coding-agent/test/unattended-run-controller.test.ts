@@ -102,6 +102,39 @@ describe("UnattendedRunController.negotiate (fail-closed)", () => {
 	});
 });
 
+describe("UnattendedRunController.negotiate (membership + mandatory floor)", () => {
+	it("rejects unknown scopes with invalid_unattended_declaration (#319, issue 03)", () => {
+		try {
+			UnattendedRunController.negotiate(decl({ scopes: ["not-a-real-scope"] }), ctx());
+			throw new Error("expected refusal");
+		} catch (e) {
+			expect(e).toBeInstanceOf(UnattendedNegotiationError);
+			expect((e as UnattendedNegotiationError).code).toBe("invalid_unattended_declaration");
+		}
+	});
+
+	it("rejects unknown action classes with invalid_unattended_declaration (#319, issue 03)", () => {
+		try {
+			UnattendedRunController.negotiate(decl({ action_allowlist: ["bogus.action"] }), ctx());
+			throw new Error("expected refusal");
+		} catch (e) {
+			expect(e).toBeInstanceOf(UnattendedNegotiationError);
+			expect((e as UnattendedNegotiationError).code).toBe("invalid_unattended_declaration");
+		}
+	});
+
+	it("always grants the prompt scope and command.prompt action floor (issue 05)", () => {
+		const controller = UnattendedRunController.negotiate(
+			decl({ scopes: ["message:read"], action_allowlist: ["command.message_read"] }),
+			ctx(),
+		);
+		expect(controller.scopes.has("prompt")).toBe(true);
+		expect(controller.actionAllowlist.has("command.prompt")).toBe(true);
+		// The floor must not silently widen unrelated scopes.
+		expect(controller.scopes.has("bash")).toBe(false);
+	});
+});
+
 describe("UnattendedRunController budget accounting", () => {
 	it("preflights tool calls and breaches before exceeding the cap", () => {
 		const c = ctx();

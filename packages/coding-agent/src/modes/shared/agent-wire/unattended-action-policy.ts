@@ -45,6 +45,30 @@ export function actionClassForScope(scope: BridgeCommandScope): RpcUnattendedAct
 	}
 }
 
+/** Runtime list of every v1 action class — membership-validation source for negotiate (#319). */
+export const RPC_UNATTENDED_ACTION_CLASSES: readonly RpcUnattendedActionClass[] = [
+	"command.prompt",
+	"command.control",
+	"command.bash",
+	"command.export",
+	"command.session",
+	"command.model",
+	"command.message_read",
+	"command.host_tools",
+	"command.host_uri",
+	"command.admin",
+	"bash.readonly",
+	"bash.mutating",
+	"bash.destructive",
+	"git.force_push",
+	"file.delete",
+	"file.write",
+	"host_tool.invoke",
+	"host_uri.read",
+	"host_uri.write",
+	"auth.login",
+];
+
 const READONLY_COMMANDS = new Set([
 	"ls",
 	"cat",

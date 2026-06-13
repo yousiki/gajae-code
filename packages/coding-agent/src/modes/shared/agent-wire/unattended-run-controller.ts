@@ -24,7 +24,8 @@ import type {
 	RpcUnattendedRefusalCode,
 } from "../../rpc/rpc-types";
 import type { BridgeCommandScope } from "./scopes";
-import { actionClassForScope, classifyBashAction } from "./unattended-action-policy";
+import { BRIDGE_COMMAND_SCOPES, MANDATORY_FLOOR_COMMAND_SCOPES } from "./scopes";
+import { actionClassForScope, classifyBashAction, RPC_UNATTENDED_ACTION_CLASSES } from "./unattended-action-policy";
 
 /** Coordinated abort surfaces invoked exactly once on a budget breach / abort. */
 export interface UnattendedAbortHooks {
@@ -157,8 +158,11 @@ export class UnattendedRunController {
 		this.sessionId = ctx.sessionId;
 		this.actor = declaration.actor;
 		this.budget = budget;
-		this.scopes = new Set(declaration.scopes);
-		this.actionAllowlist = new Set(declaration.action_allowlist);
+		this.scopes = new Set([...declaration.scopes, ...MANDATORY_FLOOR_COMMAND_SCOPES]);
+		this.actionAllowlist = new Set([
+			...declaration.action_allowlist,
+			...MANDATORY_FLOOR_COMMAND_SCOPES.map(actionClassForScope),
+		]);
 		this.now = ctx.now ?? Date.now;
 		this.audit = ctx.audit;
 		this.abortHooks = ctx.abortHooks ?? {};
@@ -181,6 +185,22 @@ export class UnattendedRunController {
 			throw new UnattendedNegotiationError(
 				"invalid_unattended_declaration",
 				"declaration.action_allowlist must be string[]",
+			);
+		}
+		const unknownScopes = d.scopes.filter(scope => !BRIDGE_COMMAND_SCOPES.includes(scope as BridgeCommandScope));
+		if (unknownScopes.length > 0) {
+			throw new UnattendedNegotiationError(
+				"invalid_unattended_declaration",
+				`declaration.scopes contains unknown scope(s): ${unknownScopes.join(", ")}`,
+			);
+		}
+		const unknownActions = d.action_allowlist.filter(
+			action => !RPC_UNATTENDED_ACTION_CLASSES.includes(action as RpcUnattendedActionClass),
+		);
+		if (unknownActions.length > 0) {
+			throw new UnattendedNegotiationError(
+				"invalid_unattended_declaration",
+				`declaration.action_allowlist contains unknown action class(es): ${unknownActions.join(", ")}`,
 			);
 		}
 		const budget = validateBudget(d.budget);

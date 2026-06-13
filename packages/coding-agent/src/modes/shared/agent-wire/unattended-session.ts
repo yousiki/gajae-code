@@ -31,6 +31,13 @@ import {
 } from "./unattended-run-controller";
 import { type GateStore, MemoryGateStore, type OpenGateInput, WorkflowGateBroker } from "./workflow-gate-broker";
 
+/**
+ * RPC commands that perform agent/tool work and therefore consume one unit of the
+ * `max_tool_calls` budget. Read-only/control/cancellation commands are wall-time-bounded
+ * and scope-checked but must NOT charge the tool-call budget (issue 04).
+ */
+const CHARGED_COMMAND_TYPES = new Set<RpcCommand["type"]>(["bash", "prompt", "steer", "follow_up", "abort_and_prompt"]);
+
 /** Minimal surface a skill runtime / ask tool uses to emit a gate and await its answer. */
 export interface WorkflowGateEmitter {
 	/** True only when unattended mode has been negotiated. */
@@ -116,7 +123,15 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 
 	preflightCommand(command: RpcCommand): void {
 		if (!this.#controller) return;
-		this.#controller.preflightToolCall(`${command.type} preflight`);
+		const phase = `${command.type} preflight`;
+		// Always enforce wall-time; only charge the tool-call budget for commands that perform
+		// agent/tool work (issue 04). Read-only/control/cancellation commands must not consume
+		// max_tool_calls, but remain wall-time-bounded and scope/action-checked.
+		if (CHARGED_COMMAND_TYPES.has(command.type)) {
+			this.#controller.preflightToolCall(phase);
+		} else {
+			this.#controller.checkWallTime(phase);
+		}
 		if (command.type === "bash") {
 			this.#controller.authorizeBash(command.command);
 			return;

@@ -679,6 +679,13 @@ class TodoPhase:
 
 
 @dataclass(slots=True, frozen=True)
+class ContextUsage:
+    tokens: int
+    context_window: int
+    percent: float
+
+
+@dataclass(slots=True, frozen=True)
 class SessionState:
     model: ModelInfo | None
     thinking_level: ThinkingLevel | None
@@ -696,6 +703,7 @@ class SessionState:
     todo_phases: tuple[TodoPhase, ...] = ()
     system_prompt: tuple[str, ...] = ()
     dump_tools: tuple[ToolDescriptor, ...] = ()
+    context_usage: ContextUsage | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -748,6 +756,66 @@ class BranchMessage:
 class BranchResult:
     text: str
     cancelled: bool
+
+
+@dataclass(slots=True, frozen=True)
+class UnattendedBudget:
+    max_tokens: float
+    max_tool_calls: float
+    max_wall_time_ms: float
+    max_cost_usd: float
+
+
+@dataclass(slots=True, frozen=True)
+class UnattendedAccepted:
+    run_id: str
+    actor: str
+    budget: UnattendedBudget
+    scopes: tuple[str, ...]
+    action_allowlist: tuple[str, ...]
+    accepted_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class LoginProvider:
+    id: str
+    name: str
+    available: bool
+    authenticated: bool
+
+
+@dataclass(slots=True, frozen=True)
+class HandoffResult:
+    saved_path: str | None = None
+
+
+def parse_unattended_accepted(payload: JsonObject) -> UnattendedAccepted:
+    budget_payload = payload.get("budget")
+    budget_dict = cast(JsonObject, budget_payload) if isinstance(budget_payload, dict) else {}
+    scopes_payload = payload.get("scopes")
+    actions_payload = payload.get("action_allowlist")
+    return UnattendedAccepted(
+        run_id=_require_str(payload, "run_id"),
+        actor=str(payload.get("actor", "")),
+        budget=UnattendedBudget(
+            max_tokens=float(budget_dict.get("max_tokens", 0)),
+            max_tool_calls=float(budget_dict.get("max_tool_calls", 0)),
+            max_wall_time_ms=float(budget_dict.get("max_wall_time_ms", 0)),
+            max_cost_usd=float(budget_dict.get("max_cost_usd", 0)),
+        ),
+        scopes=tuple(str(s) for s in scopes_payload) if isinstance(scopes_payload, list) else (),
+        action_allowlist=tuple(str(a) for a in actions_payload) if isinstance(actions_payload, list) else (),
+        accepted_at=str(payload.get("accepted_at", "")),
+    )
+
+
+def parse_login_provider(payload: JsonObject) -> LoginProvider:
+    return LoginProvider(
+        id=_require_str(payload, "id"),
+        name=str(payload.get("name", "")),
+        available=bool(payload.get("available", False)),
+        authenticated=bool(payload.get("authenticated", False)),
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -1178,6 +1246,16 @@ def parse_todo_phases(payload: JsonValue | None) -> tuple[TodoPhase, ...]:
     return tuple(parse_todo_phase(cast(JsonObject, item)) for item in payload)
 
 
+def _parse_context_usage(payload: JsonValue | None) -> ContextUsage | None:
+    if not isinstance(payload, dict):
+        return None
+    return ContextUsage(
+        tokens=int(payload.get("tokens", 0)),
+        context_window=int(payload.get("contextWindow", 0)),
+        percent=float(payload.get("percent", 0)),
+    )
+
+
 def parse_session_state(payload: JsonObject) -> SessionState:
     dump_tools = tuple(
         parse_tool_descriptor(_clone_json_object(item, field="dumpTools[]")) for item in cast(list[Any], payload.get("dumpTools") or [])
@@ -1211,6 +1289,7 @@ def parse_session_state(payload: JsonObject) -> SessionState:
         todo_phases=parse_todo_phases(cast(JsonValue | None, payload.get("todoPhases"))),
         system_prompt=_optional_str_list(payload, "systemPrompt"),
         dump_tools=dump_tools,
+        context_usage=_parse_context_usage(cast(JsonValue | None, payload.get("contextUsage"))),
     )
 
 

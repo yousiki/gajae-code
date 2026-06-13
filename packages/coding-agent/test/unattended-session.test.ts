@@ -121,4 +121,32 @@ describe("UnattendedSessionControlPlane", () => {
 		expect(rejected).toBe(true);
 		await expect(pending).rejects.toThrow(/aborted/);
 	});
+	it("does not charge max_tool_calls for read-only/control commands; bash still charges (issue 04)", () => {
+		const emitted: RpcWorkflowGate[] = [];
+		const plane = new UnattendedSessionControlPlane({ runId: "budget-run", emitFrame: g => emitted.push(g) });
+		plane.negotiate({
+			actor: "hermes",
+			budget: { max_tokens: 1000, max_tool_calls: 10, max_wall_time_ms: 60_000, max_cost_usd: 5 },
+			scopes: ["prompt", "control", "message:read", "bash"],
+			action_allowlist: [
+				"command.prompt",
+				"command.control",
+				"command.message_read",
+				"command.bash",
+				"bash.readonly",
+			],
+		});
+		const controller = plane.controller;
+		expect(controller).toBeDefined();
+		// Read-only/control/cancellation commands must never consume the tool-call budget.
+		for (let i = 0; i < 20; i++) {
+			plane.preflightCommand({ type: "get_state" });
+			plane.preflightCommand({ type: "set_steering_mode", mode: "all" });
+			plane.preflightCommand({ type: "abort" });
+		}
+		expect(controller?.usageSnapshot().toolCalls).toBe(0);
+		// A bash command performs real tool work and still charges one unit.
+		plane.preflightCommand({ type: "bash", command: "pwd" });
+		expect(controller?.usageSnapshot().toolCalls).toBe(1);
+	});
 });
