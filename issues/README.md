@@ -22,12 +22,12 @@ Landed + verified (consensus: Architect REQUEST CHANGES → revision → Critic 
 - **07** fixed — `gjc_rpc` typed `negotiate_unattended`/`handoff`/`login`/`get_login_providers` + models.
 - **11** fixed — `docs/rpc.md` workflow-gate section reconciled to `RpcWorkflowGate`.
 - **13** fixed — RPC stdin loop de-serialized: ordered commands run through a serial chain (causal order preserved) while `abort`/`abort_bash`/`abort_retry` run on an immediate fast lane; `abort_bash` now cancels a running `bash`; shutdown drains in-flight commands (bounded).
+- **08** fixed — added an env-gated (`GJC_RPC_REAL_BINARY=1`) real-binary integration lane that drives actual `gjc --mode rpc` and checks the typed client against the live protocol (`context_usage`, correlated errors, negotiate floor, unknown-scope rejection); skips by default.
 - **12** already fixed on dev (`$pickenv("GJC_RPC_EMIT_TITLE","PI_RPC_EMIT_TITLE")`).
 
 Deferred (designed; tracked as follow-ups, NOT claimed fixed):
 
-- **09** persistent/detached session, **10** session registry — architectural.
-- **08** real-binary `gjc_rpc` integration test lane.
+- **09** persistent/detached session, **10** session registry — architectural (own follow-up PR).
 
 Plan + consensus artifacts: `.gjc/plans/ralplan/2026-06-13-1236-71f5/` (`pending-approval.md`).
 
