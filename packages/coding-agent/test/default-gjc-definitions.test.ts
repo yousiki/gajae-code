@@ -60,11 +60,12 @@ describe("default GJC definitions", () => {
 
 		expect(skills).toEqual(expected);
 		expect(workflowDefinitions).toHaveLength(4);
-		expect(definitions).toHaveLength(7);
+		expect(definitions).toHaveLength(8);
 		expect(workflowDefinitions.every(definition => definition.relativePath.startsWith("skills/"))).toBe(true);
 		expect(workflowDefinitions.every(definition => definition.content.includes(definition.name))).toBe(true);
-		expect(fragmentDefinitions).toHaveLength(3);
+		expect(fragmentDefinitions).toHaveLength(4);
 		expect(fragmentDefinitions.map(definition => definition.parentSkillName).sort()).toEqual([
+			"deep-interview",
 			"deep-interview",
 			"deep-interview",
 			"ultragoal",
@@ -72,6 +73,7 @@ describe("default GJC definitions", () => {
 		expect(fragmentDefinitions.map(definition => definition.relativePath).sort()).toEqual([
 			"skill-fragments/deep-interview/auto-answer-uncertain.md",
 			"skill-fragments/deep-interview/auto-research-greenfield.md",
+			"skill-fragments/deep-interview/lateral-review-panel.md",
 			"skill-fragments/ultragoal/ai-slop-cleaner.md",
 		]);
 	});
@@ -84,11 +86,12 @@ describe("default GJC definitions", () => {
 				.map(skill => skill.name)
 				.sort(),
 		).toEqual([...DEFAULT_GJC_DEFINITION_NAMES].sort());
-		expect(fragments).toHaveLength(2);
-		expect(fragments.map(fragment => fragment.kind)).toEqual(["skill-fragment", "skill-fragment"]);
+		expect(fragments).toHaveLength(3);
+		expect(fragments.map(fragment => fragment.kind)).toEqual(["skill-fragment", "skill-fragment", "skill-fragment"]);
 		expect(fragments.map(fragment => fragment.relativePath).sort()).toEqual([
 			"skill-fragments/deep-interview/auto-answer-uncertain.md",
 			"skill-fragments/deep-interview/auto-research-greenfield.md",
+			"skill-fragments/deep-interview/lateral-review-panel.md",
 		]);
 		expect(fragments.every(fragment => fragment.content.includes("read-only architect"))).toBe(true);
 	});
@@ -377,10 +380,10 @@ Project executor override body.
 		const deepInterviewSkillPath = path.join(targetRoot, "skills", "deep-interview", "SKILL.md");
 		const installedDeepInterview = await Bun.file(deepInterviewSkillPath).text();
 
-		expect(initial.written).toBe(7);
-		expect(initial.total).toBe(7);
+		expect(initial.written).toBe(8);
+		expect(initial.total).toBe(8);
 		expect(initial.skipped).toBe(0);
-		expect(initial.files.filter(file => file.kind === "skill-fragment")).toHaveLength(3);
+		expect(initial.files.filter(file => file.kind === "skill-fragment")).toHaveLength(4);
 
 		const installedResearchFragment = await Bun.file(
 			path.join(targetRoot, "skill-fragments", "deep-interview", "auto-research-greenfield.md"),
@@ -389,15 +392,15 @@ Project executor override body.
 		await Bun.write(deepInterviewSkillPath, "local edit");
 		const skipped = await installDefaultGjcDefinitions({ targetRoot });
 		expect(skipped.written).toBe(0);
-		expect(skipped.skipped).toBe(7);
+		expect(skipped.skipped).toBe(8);
 		expect(await Bun.file(deepInterviewSkillPath).text()).toBe("local edit");
 
 		const check = await installDefaultGjcDefinitions({ targetRoot, check: true });
 		expect(check.different).toBe(1);
-		expect(check.matching).toBe(6);
+		expect(check.matching).toBe(7);
 
 		const forced = await installDefaultGjcDefinitions({ targetRoot, force: true });
-		expect(forced.written).toBe(7);
+		expect(forced.written).toBe(8);
 		expect(await Bun.file(deepInterviewSkillPath).text()).toBe(installedDeepInterview);
 		expect(
 			forced.files.some(file => file.kind === "skill-fragment" && file.parentSkillName === "deep-interview"),

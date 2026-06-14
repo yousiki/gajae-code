@@ -4,6 +4,7 @@ import autoAnswerUncertainFragment from "./gjc/skills/deep-interview/auto-answer
 import autoResearchGreenfieldFragment from "./gjc/skills/deep-interview/auto-research-greenfield.md" with {
 	type: "text",
 };
+import lateralReviewPanelFragment from "./gjc/skills/deep-interview/lateral-review-panel.md" with { type: "text" };
 import deepInterviewSkill from "./gjc/skills/deep-interview/SKILL.md" with { type: "text" };
 import ralplanSkill from "./gjc/skills/ralplan/SKILL.md" with { type: "text" };
 import teamSkill from "./gjc/skills/team/SKILL.md" with { type: "text" };
@@ -92,6 +93,12 @@ const DEFAULT_GJC_DEFINITIONS: readonly DefaultGjcDefinition[] = [
 		parentSkillName: "deep-interview",
 		relativePath: "skill-fragments/deep-interview/auto-answer-uncertain.md",
 		content: autoAnswerUncertainFragment,
+	},
+	{
+		kind: "skill-fragment",
+		parentSkillName: "deep-interview",
+		relativePath: "skill-fragments/deep-interview/lateral-review-panel.md",
+		content: lateralReviewPanelFragment,
 	},
 	{
 		kind: "skill-fragment",

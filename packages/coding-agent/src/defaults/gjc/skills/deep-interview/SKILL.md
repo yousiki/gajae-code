@@ -52,16 +52,19 @@ Inspired by the [Ouroboros project](https://github.com/Q00/ouroboros) which demo
 - Do not proceed to execution until ambiguity ≤ the resolved threshold for this run and the user explicitly approves a scoped execution path
 - Allow early exit with a clear warning if ambiguity is still high
 - Persist interview state for resume across session interruptions
-- Challenge agents activate at specific round thresholds to shift perspective
+- A multi-persona lateral-review panel convenes at ambiguity-milestone transitions (and before synthesizing any agent-supplied answer) to expose blind spots from independent perspectives
+- Refine free-text answers into a structured interpretation and confirm nothing is lost before scoring
+- After 3 consecutive agent-resolved answers (accepted auto-research candidates or auto-answers), route the next question to the user (dialectic rhythm guard)
+- Run an independent closure audit and a one-sentence goal restatement, each requiring explicit user confirmation, before crystallizing the spec
 </Execution_Policy>
 
 <Internal_Auto_Mode_Protocol>
-- `auto-research-greenfield.md` and `auto-answer-uncertain.md` are internal prompt fragments loaded on demand with bundle metadata `kind: "skill-fragment"`; they are not public skills, are never slash-command/discoverable, and must not be registered through any `skill://` route.
+- `auto-research-greenfield.md`, `auto-answer-uncertain.md`, and `lateral-review-panel.md` are internal prompt fragments loaded on demand with bundle metadata `kind: "skill-fragment"`; they are not public skills, are never slash-command/discoverable, and must not be registered through any `skill://` route.
 - Load fragments only for the specific hook that needs them, with forked inherited context kept read-only and prompt-budgeted; summarize active interview context before spawning the architect if the payload is large.
 - Auto-mode architects are read-only: no code edits, no `.gjc/` mutation, no workflow chaining, no formatters, and no execution delegation.
 - Validate every fragment response before using it: required sections must be present, candidates/answer must match the requested shape, rationale must cite available context, confidence must be explicit, and insufficient-context fallbacks must be honored.
 - If architect spawn, fragment loading, or response validation fails, continue the normal manual interview path silently and record an internal audit note in state by incrementing `architect_failures`; do not expose tool noise to the user unless it changes the next user-facing question.
-- Track `auto_researched_rounds`, `auto_answered_rounds`, and `architect_failures` in state and final spec metadata.
+- Track `auto_researched_rounds`, `auto_answered_rounds`, `lateral_reviews`, `auto_answer_streak`, `refined_rounds`, `architect_failures`, and `lateral_panel_failures` in state and final spec metadata.
 </Internal_Auto_Mode_Protocol>
 
 
@@ -145,10 +148,16 @@ Deep Interview threshold: <resolvedThresholdPercent> (source: <resolvedThreshold
       "deferrals": [],
       "last_targeted_component_id": null
     },
-    "challenge_modes_used": [],
     "ontology_snapshots": [],
     "auto_researched_rounds": [],
     "auto_answered_rounds": [],
+    "lateral_reviews": [],
+    "lateral_panel_failures": 0,
+    "auto_answer_streak": 0,
+    "refined_rounds": [],
+    "closure_overrides": [],
+    "restated_goal": null,
+    "ambiguity_milestone": "initial",
     "architect_failures": 0
   }
 }
@@ -239,7 +248,7 @@ Build the question generation prompt with:
 - The prompt-safe initial-context summary (if one was created), otherwise the user's original idea
 - Prior Q&A rounds trimmed or summarized to fit the prompt budget while preserving decisions, constraints, unresolved gaps, and ontology changes
 - Current clarity scores per dimension (which is weakest?)
-- Challenge agent mode (if activated -- see Phase 3)
+- Lateral-review panel findings (if convened this round -- see Phase 3)
 - Brownfield codebase context (if applicable), summarized to cited paths/symbols/patterns instead of raw dumps
 - Locked topology from Round 0, including active components, deferred components, prior per-component scores, and `last_targeted_component_id`
 
@@ -253,7 +262,9 @@ If any prompt input is too large, summarize it first and then continue from the 
 - Generate a question that specifically improves that component's weakest dimension
 - State, in one sentence before the question, why this component/dimension pair is now the bottleneck to reducing ambiguity
 - Questions should expose ASSUMPTIONS, not gather feature lists
+- **Facts vs decisions:** answer factual questions (current stack, versions, existing patterns, external API limits) from explore/research and present them as cited confirmations; route every *decision* (goals, scope, tradeoffs, desired behavior for new work) to the user. When unsure which a question is, treat it as a decision and ask.
 - If the scope is still conceptually fuzzy (entities keep shifting, the user is naming symptoms, or the core noun is unstable), switch to an ontology-style question that asks what the thing fundamentally IS before returning to feature/detail questions
+- **Dialectic rhythm guard:** increment `state.auto_answer_streak` when a round is resolved without direct user judgment (an accepted auto-research candidate or an auto-answer); reset it to 0 on any direct, refined, or cited-confirmation answer from the user. If the streak reaches 3, route the next question directly to the user even if it looks auto-answerable, then reset. The interview is with the human, not the codebase.
 
 **Question styles by dimension:**
 | Dimension | Question Style | Example |
@@ -289,6 +300,14 @@ When calling `ask`, SHOULD include optional structured metadata so the runtime c
 After the `ask` tool resolves and before ambiguity scoring, if the user opts out of answering the current question or explicitly asks the agent to decide, load `auto-answer-uncertain.md` as an internal `kind: "skill-fragment"` prompt for a fork-context architect. Pass the opted-out question, prompt-safe transcript summary, locked topology, current scores/gaps, and any auto-research candidates used for the round. The architect must return exactly one decisive answer with rationale, confidence, and explicit uncertainty. Validate the response shape before using it; if valid, record it as the tentative answer for scoring, append the round number to `auto_answered_rounds`, and mark the transcript answer as architect-assisted.
 
 Auto-answer has a clarity cap: unless the architect confidence is `high` and uncertainty is negligible, no dimension score improved solely by the auto-answer may exceed `0.85`. If the auto-answer would make ambiguity cross the resolved threshold, ask the user for threshold-crossing confirmation before Phase 4: present the tentative assumption and require explicit confirmation, revision, or continued questioning. On architect failure or invalid response, continue with the user's opt-out as an unresolved gap, increment `architect_failures`, and do not block the interview.
+
+### Step 2b″: Refine Free-Text Answers
+
+When the user's answer is free-text that carries reasoning, constraints, or scope decisions, do not forward it to scoring as a lossy one-line label. First structure it into a compact interpretation using the canonical sections — **Decision**, **Reasoning**, **Constraints (user-stated)**, **Out of scope (user-stated)**, and **Codebase context (verified)** (omit empty sections) — then confirm with exactly one `ask` that nothing is lost or misrepresented. Apply `language.instruction` when present.
+
+Offer options such as **Send as-is**, **Add a constraint**, **Mark something out of scope**, **Add context**, and **Rewrite**, plus free-text. If the user picks anything other than "Send as-is", collect the exact missing text with one follow-up `ask` (never infer it from the option label), fold it into the structured interpretation, and re-confirm. Do not advance to scoring while the user is still saying something is missing.
+
+Skip Refine for short answers with no attached reasoning (e.g. "Yes" / "No" / a single proper noun), for pre-built option picks where the structure is already explicit, for auto-confirmed code/brownfield facts, and for architect auto-answers (already structured by Step 2b′). A refined answer counts as direct user judgment: record the round in `refined_rounds` and reset `auto_answer_streak` to 0. Feed the confirmed structured interpretation — not the raw free text — into Step 2c scoring and established-facts maintenance.
 
 ### Step 2c: Score Ambiguity
 
@@ -407,6 +426,7 @@ Round {n} complete.
 **Topology:** Targeted {target_component_name} | Active: {active_component_count} | Deferred: {deferred_component_count} | Next rotation after: {last_targeted_component_id}
 
 **Ontology:** {entity_count} entities | Stability: {stability_ratio} | New: {new} | Changed: {changed} | Stable: {stable}
+**Milestone:** {prior_milestone} → {current_milestone}{milestone_transition ? " — lateral panel convened" : ""}
 
 **Next target:** {target_component_name} / {weakest_dimension} — {weakest_dimension_rationale}
 
@@ -419,6 +439,7 @@ Apply `language.instruction` when present before showing this progress report so
 ### Step 2e: Update State
 
 Update state in two phases. The `ask` answer is first recorded by the runtime as an `answered` shell. Scoring then enriches the same round record to `scored` with global scores, per-component `topology.components[].clarity_scores`, `topology.components[].weakest_dimension`, trigger metadata, established-facts changes, ontology snapshot, `topology.last_targeted_component_id`, `auto_researched_rounds`, `auto_answered_rounds`, and `architect_failures`. When `deepInterview` ask metadata is present, no manual per-round `gjc state write` is required for the answer shell; only scoring enrichment/state maintenance remains. When metadata is absent, use the legacy `gjc state write` path to persist the new round and never patch `.gjc/state` directly unless an explicit force override is active.
+Also recompute and persist `ambiguity_milestone` each round (detect band transitions for the Phase 3 panel), and persist `auto_answer_streak`, `refined_rounds`, `lateral_reviews`, and `lateral_panel_failures` alongside the existing fields.
 
 ### Step 2f: Check Soft Limits
 
@@ -426,27 +447,42 @@ Update state in two phases. The `ask` answer is first recorded by the runtime as
 - **Round 10**: Show soft warning: "We're at 10 rounds. Current ambiguity: {score}%. Continue or proceed with current clarity?"
 - **Round 20**: Hard cap: "Maximum interview rounds reached. Proceeding with current clarity level ({score}%)."
 
-## Phase 3: Challenge Agents
+## Phase 3: Lateral Review Panel (milestone-triggered)
 
-At specific round thresholds, shift the questioning perspective:
+The interview convenes a short multi-persona panel at **ambiguity-milestone transitions** instead of at fixed round numbers. Define milestone bands from the round's ambiguity score:
 
-### Round 4+: Contrarian Mode
-Inject into the question generation prompt:
-> You are now in CONTRARIAN mode. Your next question should challenge the user's core assumption. Ask "What if the opposite were true?" or "What if this constraint doesn't actually exist?" The goal is to test whether the user's framing is correct or just habitual.
+| Band | Ambiguity |
+|------|-----------|
+| `initial` | > 0.60 |
+| `progress` | 0.60 ≥ a > 0.30 |
+| `refined` | 0.30 ≥ a > threshold |
+| `ready` | ≤ threshold |
 
-### Round 6+: Simplifier Mode
-Inject into the question generation prompt:
-> You are now in SIMPLIFIER mode. Your next question should probe whether complexity can be removed. Ask "What's the simplest version that would still be valuable?" or "Which of these constraints are actually necessary vs. assumed?" The goal is to find the minimal viable specification.
+A transition occurs whenever the band changes versus the prior scored round — in either direction, since bidirectional scoring can move the band back up. On a transition, and also before synthesizing any agent-supplied answer (auto-research candidates, an auto-answer, or a code/brownfield auto-confirm that carries real interpretation), convene the panel before generating or asking the next question.
 
-### Round 8+: Ontologist Mode (if ambiguity still > 0.3)
-Inject into the question generation prompt:
-> You are now in ONTOLOGIST mode. The ambiguity is still high after 8 rounds, suggesting we may be addressing symptoms rather than the core problem. The tracked entities so far are: {current_entities_summary from latest ontology snapshot}. Ask "What IS this, really?" or "Looking at these entities, which one is the CORE concept and which are just supporting?" The goal is to find the essence by examining the ontology.
+**Personas (run in parallel, independent context):** dispatch `researcher`, `contrarian`, and `simplifier` as parallel fork-context subagents through the `lateral-review-panel.md` fragment, each with its own copy of the prompt-safe context so no persona anchors on another's framing. Add the `architect` persona when the round changed system shape — scope expansion, a new component or integration (trigger D), or any change to ownership or architecture. Each persona is a read-only architect: no edits, no `.gjc/` mutation, no execution.
 
-Challenge modes are used ONCE each, then return to normal Socratic questioning. Track which modes have been used in state.
+**Folding findings:** validate each persona response, then fold only concrete, user-safe findings into the next single user-facing question — as 2-3 ranked answer options or one recommended draft. The panel never adds a second question, never mutates requirements on its own, and never marks the interview complete. The one-question-per-round rule stays intact.
+
+**Persona lenses:**
+- `researcher` — surfaces external facts, prior art, and unknowns the interview depends on.
+- `contrarian` — challenges the core assumption: "What if the opposite were true? Is this constraint real or habitual?"
+- `simplifier` — probes whether complexity can be removed: "What is the simplest version that is still valuable?"
+- `architect` — checks system shape, ownership, and integration impact when scope changed.
+
+**Ontology escalation:** if ambiguity stalls (same score ±0.05 for 3 rounds) or stays > 0.30 after 8 rounds, instruct the panel (especially `contrarian` + `architect`) to ask "What IS this, really?" — identify the core entity versus supporting views from the latest ontology snapshot before returning to feature questions.
+
+**Bookkeeping:** record each convened panel in `state.lateral_reviews` (round, milestone transition or pre-answer trigger, personas dispatched, findings folded). On panel spawn or validation failure, fall back silently to the normal generated question and increment `lateral_panel_failures`; do not expose tool noise unless it changes the next user-facing question. The panel is a prompt-budgeted assist layer — summarize oversized context before dispatch.
 
 ## Phase 4: Crystallize Spec
 
 When ambiguity ≤ threshold (or hard cap / early exit):
+
+**Before generating the spec, two gates must pass, in order:**
+
+**4a. Closure / Acceptance Guard.** Even when ambiguity ≤ threshold, do not treat the math as completion. Run an independent readiness audit from the full main-session perspective (including explore findings, established facts, and triggers the scorer may not have fully weighed). Confirm every active topology component has goal/constraint/criteria coverage, no unresolved or disputed trigger remains on a path that matters, and no low-confidence auto-answer is standing in for user-confirmed truth above the clarity cap. If a material gap exists, explicitly override the gate to the user — "The math says ready, but I am not accepting it yet because {gap}" — and ask the single highest-impact follow-up, returning to Phase 2. Record any override in `state.closure_overrides`.
+
+**4b. Restate gate.** Once closure passes, collapse the agreed answers into ONE sentence goal that covers every active component, and confirm it with a single `ask`: "If someone read only this line, would they reach the same outcome you have in mind?" Offer **Yes, crystallize**, **Adjust wording**, and **Missing scope**, plus free-text, applying `language.instruction` when present. On "Adjust wording" / "Missing scope", collect the exact correction with one follow-up `ask`, route it back through Step 2c scoring and established-facts maintenance (a correction can change ambiguity), then re-run closure and ask the Restate gate again. Cap at two loops; if alignment is not reached, return to Phase 2 with a targeted question instead of forcing a goal line. Persist the confirmed line as `state.restated_goal`.
 
 1. **Generate the specification** using opus model with the prompt-safe transcript. If the full interview transcript or initial context is too large, include the summary plus all concrete decisions, acceptance criteria, unresolved gaps, and ontology snapshots; never overflow the prompt with raw oversized context.
    - Apply `language.instruction` when present so user-facing prose in the spec preserves the session language; keep code identifiers, file paths, commands, JSON/settings keys, and quoted source text unchanged.
@@ -474,6 +510,11 @@ Spec structure:
 - Auto-Researched Rounds: {auto_researched_rounds}
 - Auto-Answered Rounds: {auto_answered_rounds}
 - Architect Failures: {architect_failures}
+- Lateral Reviews: {lateral_reviews count with milestones}
+- Lateral Panel Failures: {lateral_panel_failures}
+- Refined Rounds: {refined_rounds}
+- Closure Overrides: {closure_overrides count, or none}
+- Restated Goal: {restated_goal}
 
 ## Clarity Breakdown
 | Dimension | Score | Weight | Weighted |
@@ -497,6 +538,9 @@ Spec structure:
 
 ## Trigger Metadata
 {Summarize per-round trigger metadata: trigger label/status, affected component/dimension, prior -> new ambiguity direction, evidence, contradicted established fact when relevant, and disputed/unresolved rationale when applicable.}
+
+## Lateral Review Panel
+{Summarize convened panels: round, milestone transition or pre-answer trigger, personas dispatched, and the concrete findings folded into questions. Note any lateral_panel_failures.}
 
 ## Goal
 {crystal-clear goal statement derived from interview, covering every active topology component}
@@ -611,7 +655,7 @@ Stage 1: Deep Interview          Stage 2: ralplan consensus       Stage 3: Separ
 ┌─────────────────────┐    ┌───────────────────────────┐    ┌──────────────────────┐
 │ Socratic Q&A        │    │ Planner creates plan      │    │ User chooses if/how  │
 │ Ambiguity scoring   │───>│ Architect reviews         │───>│ execution proceeds   │
-│ Challenge agents    │    │ Critic validates          │    │ via ultragoal (default) │
+│ Lateral panel       │    │ Critic validates          │    │ via ultragoal (default) │
 │ Spec crystallization│    │ Loop until consensus      │    │ no auto-handoff      │
 │ Gate: ≤<resolvedThresholdPercent> ambiguity│    │ ADR + RALPLAN-DR summary  │    │                      │
 └─────────────────────┘    └───────────────────────────┘    └──────────────────────┘
@@ -639,8 +683,9 @@ Skipping any stage is possible but reduces quality assurance:
 - Use `gjc state write` / `gjc state read` for interview state persistence; the initial and subsequent deep-interview state payloads must include `threshold_source` alongside `threshold`; do not edit `.gjc/state` directly without force override.
 - Use the GJC workflow CLI to save the final spec at `.gjc/specs/deep-interview-{slug}.md` exactly; do not use `write`, `edit`, or `ast_edit` directly on `.gjc/` paths without force override.
 - Use public GJC workflow entrypoints to bridge to ralplan, ultragoal, or team only after explicit execution approval — never implement directly. Implementation handoff defaults to ultragoal; reserve team for when tmux-based interactive worker parallelization is genuinely required.
-- Challenge agent modes are prompt injections, not separate agent spawns
-- Use internal fragment auto-modes only at their documented hooks: `auto-research-greenfield.md` between Step 2a and 2b for greenfield `research: true` questions, and `auto-answer-uncertain.md` as Step 2b′ after `ask` resolves and before scoring.
+- The lateral-review panel spawns read-only persona subagents (Task tool) in parallel with independent context; it is an assist layer, never an executor and never the completion authority
+- Apply the Refine gate (Step 2b″), the Dialectic Rhythm Guard (Step 2a), and the Closure + Restate gates (Phase 4) through the `ask` tool, preserving `language.instruction` for each
+- Use internal fragment auto-modes only at their documented hooks: `auto-research-greenfield.md` between Step 2a and 2b for greenfield `research: true` questions, `auto-answer-uncertain.md` as Step 2b′ after `ask` resolves and before scoring, and `lateral-review-panel.md` for the Phase 3 panel personas at ambiguity-milestone transitions and before synthesizing agent-supplied answers.
 - Fragment auto-modes are loaded on demand as `kind: "skill-fragment"`; they are not public workflow skills, not slash-command/discoverable, and not `skill://` registrations.
 </Tool_Usage>
 
@@ -671,15 +716,15 @@ Why good: Explored first, cited the repo evidence that triggered the question, t
 </Good>
 
 <Good>
-Contrarian mode activation:
+Lateral panel — contrarian persona:
 ```
-Round 5 | Contrarian Mode | Ambiguity: 42%
+Round 5 | Targeting: Constraints | Lateral panel: progress→refined (contrarian) | Ambiguity: 42%
 
 You've said this needs to support 10,000 concurrent users. What if it only
 needed to handle 100? Would the architecture change fundamentally, or is
 the 10K number an assumption rather than a measured requirement?
 ```
-Why good: Challenges a specific assumption (scale requirement) that could dramatically simplify the solution.
+Why good: The lateral panel's contrarian persona challenges a specific assumption (scale requirement) that could dramatically simplify the solution.
 </Good>
 
 <Good>
@@ -697,26 +742,16 @@ Why good: Respects user's desire to stop but transparently shows the risk.
 </Good>
 
 <Good>
-Ontology convergence tracking:
-```
-Round 3 entities: User, Task, Project (stability: N/A → 67%)
-Round 4 entities: User, Task, Project, Tag (stability: 75% — 3 stable, 1 new)
-Round 5 entities: User, Task, Project, Tag (stability: 100% — all 4 stable)
-
-"Ontology has converged — the same 4 entities appeared in 2 consecutive rounds
-with no changes. The domain model is stable."
-```
-Why good: Shows entity tracking across rounds with visible convergence. Stability ratio increases as the domain model solidifies, giving mathematical evidence that the interview is converging on a stable understanding.
-</Good>
-
-<Good>
-Ontology-style question for scope-fuzzy tasks:
+Ontology stabilization — ask, then watch it converge:
 ```
 Round 6 | Targeting: Goal Clarity | Why now: the core entity is still unstable across rounds, so feature questions would compound ambiguity | Ambiguity: 38%
 
-"Across the last rounds you've described this as a workflow, an inbox, and a planner. Which one is the core thing this product IS, and which ones are supporting metaphors or views?"
+"Across the last rounds you've described this as a workflow, an inbox, and a planner. Which one is the core thing this product IS, and which are supporting views?"
+
+→ Round 7 entities: User, Task, Project (stability: 67%)
+→ Round 8 entities: User, Task, Project, Tag (stability: 100% — all 4 stable across 2 rounds)
 ```
-Why good: Uses ontology-style questioning to stabilize the core noun before drilling into features, which is the right move when the scope is fuzzy rather than merely incomplete.
+Why good: An ontology-style question stabilizes the core noun before drilling into features; the stability ratio then climbing to 100% across consecutive rounds is the mathematical signal that the domain model has converged.
 </Good>
 
 <Bad>
@@ -726,14 +761,6 @@ Batching multiple questions:
 Also, what's the deployment target?"
 ```
 Why bad: Four questions at once — causes shallow answers and makes scoring inaccurate.
-</Bad>
-
-<Bad>
-Asking about codebase facts:
-```
-"What database does your project use?"
-```
-Why bad: Should have spawned explore agent to find this. Never ask the user what the code already tells you.
 </Bad>
 
 <Bad>
@@ -756,29 +783,18 @@ Why bad: 45% ambiguity means nearly half the requirements are unclear. The mathe
 </Escalation_And_Stop_Conditions>
 
 <Final_Checklist>
-- [ ] Phase 0 completed before Phase 1: settings files were read, threshold was resolved, and the first user-visible line was `Deep Interview threshold: <resolvedThresholdPercent> (source: <resolvedThresholdSource>)`
-- [ ] State includes both `threshold` and `threshold_source`, and the final spec metadata records both values
-- [ ] Existing `language` state object was preserved, and `language.instruction` was applied to announcements, topology confirmation, option labels, interview questions, progress reports, and spec prose when present
-- [ ] Interview completed (ambiguity ≤ threshold OR user chose early exit)
-- [ ] Oversized initial context/history was summarized before scoring, question generation, spec generation, or execution handoff
-- [ ] Ambiguity score displayed after every round
-- [ ] Every round explicitly names the weakest dimension and why it is the next target
-- [ ] Challenge agents activated at correct thresholds (round 4, 6, 8)
-- [ ] Spec file persisted to `.gjc/specs/deep-interview-{slug}.md` exactly through the GJC workflow CLI; ephemeral artifacts/state used `gjc state write` or workflow CLI writes, with no direct `.gjc/` edits unless force override was explicitly active
-- [ ] Spec includes: topology, goal, constraints, acceptance criteria, clarity breakdown, transcript
-- [ ] Execution bridge presented via the `ask` tool
-- [ ] Selected execution mode invoked via public GJC workflow entrypoint only after explicit execution approval (never direct implementation)
-- [ ] If 3-stage pipeline selected: `/skill:ralplan` invoked with the spec as context, then stopped with the consensus plan marked `pending approval` until the user explicitly approves execution
-- [ ] State cleaned up after approved workflow handoff
-- [ ] Brownfield confirmation questions cite repo evidence (file/path/pattern) before asking the user to decide
-- [ ] Scope-fuzzy tasks can trigger ontology-style questioning to stabilize the core entity before feature elaboration
-- [ ] Round 0 topology gate completed before ambiguity scoring and persisted `topology.confirmed_at`
-- [ ] Per-round ambiguity report includes Topology target/coverage and Ontology row with entity count and stability ratio
-- [ ] Multi-component interviews rotate targeting across active components when N > 1
-- [ ] Spec includes Topology section with confirmed active components and user-confirmed deferrals
-- [ ] Spec includes Ontology (Key Entities) table and Ontology Convergence section
-- [ ] Internal auto-mode fragments, when used, were loaded only on demand as non-public `kind: "skill-fragment"` prompts; responses were validated, failures incremented `architect_failures`, and final metadata includes `auto_researched_rounds`, `auto_answered_rounds`, and `architect_failures`
-- [ ] Auto-answer threshold crossing, if any, received explicit user confirmation before spec crystallization
+- [ ] Phase 0 ran before anything: threshold resolved and first line emitted as `Deep Interview threshold: <resolvedThresholdPercent> (source: <resolvedThresholdSource>)`; state and spec metadata record both `threshold` and `threshold_source`
+- [ ] `language.instruction` preserved across announcements, questions, options, progress reports, and spec prose when present
+- [ ] Oversized initial context/history summarized before scoring, question generation, spec generation, or handoff
+- [ ] Round 0 topology gate completed before scoring; `topology.confirmed_at` persisted
+- [ ] Ambiguity scored and displayed every round, naming the weakest component/dimension target (rotating across active components when N > 1)
+- [ ] Lateral panel convened at milestone transitions (and before synthesizing agent-supplied answers) with parallel read-only personas
+- [ ] Free-text answers passed the Refine gate; dialectic rhythm guard forced a user question after 3 agent-resolved answers; any auto-answer threshold crossing explicitly confirmed
+- [ ] Closure / Acceptance Guard and the one-sentence Restate gate both passed before crystallization
+- [ ] Interview reached ambiguity ≤ threshold OR an explicit early exit with warning
+- [ ] Spec persisted to `.gjc/specs/deep-interview-{slug}.md` exactly via the GJC CLI (no direct `.gjc/` edits without force override), covering every active topology component plus goal/constraints/acceptance criteria/clarity/ontology/transcript
+- [ ] Spec metadata includes the auto/lateral counters (`auto_researched_rounds`, `auto_answered_rounds`, `lateral_reviews`, `refined_rounds`, `architect_failures`, `lateral_panel_failures`)
+- [ ] Execution bridge presented via `ask`; execution invoked only after explicit approval through a public workflow entrypoint (never direct implementation); state cleaned up after handoff
 </Final_Checklist>
 
 <Advanced>
@@ -821,30 +837,7 @@ If the user chooses interview, team routing invokes `/skill:deep-interview`. Whe
 
 ## Approval-Gated Pipeline: deep-interview → ralplan → pending approval
 
-The recommended refinement path chains clarity and feasibility gates, then stops for explicit execution approval:
-
-```
-/skill:deep-interview "vague idea"
-  → Socratic Q&A until ambiguity ≤ <resolvedThresholdPercent>
-  → Spec written to .gjc/specs/deep-interview-{slug}.md
-  → User explicitly selects "Refine with ralplan consensus"
-  → /skill:ralplan (spec as input)
-    → Planner creates implementation plan from spec
-    → Architect reviews for architectural soundness
-    → Critic validates quality and testability
-    → Loop until consensus (max 5 iterations)
-    → Consensus plan written to .gjc/plans/
-  → Stop with the consensus plan marked pending approval
-  → Only a separate explicit execution approval may invoke execution (ultragoal by default; team only when tmux-based interactive worker parallelization is required)
-```
-
-**The ralplan skill receives the spec as context through `/skill:ralplan`** because ralplan is already the GJC Planner → Architect → Critic consensus workflow. The consensus plan includes:
-- RALPLAN-DR summary (Principles, Decision Drivers, Options)
-- ADR (Decision, Drivers, Alternatives, Why chosen, Consequences)
-- Testable acceptance criteria (inherited from deep-interview spec)
-- Implementation steps with file references
-
-**Execution is a separate approval-gated step.** The deep-interview and ralplan skills must not auto-invoke team or ultragoal merely because a spec or plan exists.
+See the Phase 5b "Approval-Gated Refinement Path" diagram for the full flow. In short: interview → spec at `.gjc/specs/deep-interview-{slug}.md` → user selects "Refine with ralplan consensus" → `/skill:ralplan` (Planner/Architect/Critic consensus, plan written to `.gjc/plans/`) → stop at `pending approval`. Execution is always a separate approval-gated step; deep-interview and ralplan never auto-invoke ultragoal or team just because a spec or plan exists.
 
 ## Integration with Ralplan Gate
 
@@ -856,24 +849,11 @@ Vague prompt → ralplan gate → deep-interview (if extremely vague) → ralpla
 
 ## Brownfield vs Greenfield Weights
 
-| Dimension | Greenfield | Brownfield |
-|-----------|-----------|------------|
-| Goal Clarity | 40% | 35% |
-| Constraint Clarity | 30% | 25% |
-| Success Criteria | 30% | 25% |
-| Context Clarity | N/A | 15% |
+See "Calculate ambiguity" in Step 2c for the weighted formulas. Brownfield adds a 15% Context Clarity dimension (Goal/Constraint/Criteria become 35/25/25) because safely modifying existing code requires understanding the system being changed.
 
-Brownfield adds Context Clarity because modifying existing code safely requires understanding the system being changed.
+## Lateral Review Panel
 
-## Challenge Agent Modes
-
-| Mode | Activates | Purpose | Prompt Injection |
-|------|-----------|---------|-----------------|
-| Contrarian | Round 4+ | Challenge assumptions | "What if the opposite were true?" |
-| Simplifier | Round 6+ | Remove complexity | "What's the simplest version?" |
-| Ontologist | Round 8+ (if ambiguity > 0.3) | Find essence | "What IS this, really?" |
-
-Each mode is used exactly once, then normal Socratic questioning resumes. Modes are tracked in state to prevent repetition.
+See Phase 3 for the full persona set (researcher/contrarian/simplifier, plus architect on scope change), the milestone bands, and the parallel independent-context dispatch.
 
 ## Ambiguity Score Interpretation
 
@@ -883,7 +863,7 @@ Each mode is used exactly once, then normal Socratic questioning resumes. Modes 
 | At or below the resolved threshold | Clear enough | Proceed |
 | Above the resolved threshold with minor gaps | Some gaps | Continue interviewing |
 | Moderate ambiguity | Significant gaps | Focus on weakest dimensions |
-| High ambiguity | Very unclear | May need reframing (Ontologist) |
+| High ambiguity | Very unclear | May need reframing (panel ontology escalation) |
 | Extreme ambiguity | Almost nothing known | Early stages, keep going |
 </Advanced>
 
