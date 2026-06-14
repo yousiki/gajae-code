@@ -680,9 +680,9 @@ class TodoPhase:
 
 @dataclass(slots=True, frozen=True)
 class ContextUsage:
-    tokens: int
+    tokens: int | None
     context_window: int
-    percent: float
+    percent: float | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1249,10 +1249,12 @@ def parse_todo_phases(payload: JsonValue | None) -> tuple[TodoPhase, ...]:
 def _parse_context_usage(payload: JsonValue | None) -> ContextUsage | None:
     if not isinstance(payload, dict):
         return None
+    raw_tokens = payload.get("tokens")
+    raw_percent = payload.get("percent")
     return ContextUsage(
-        tokens=int(payload.get("tokens", 0)),
+        tokens=None if raw_tokens is None else int(raw_tokens),
         context_window=int(payload.get("contextWindow", 0)),
-        percent=float(payload.get("percent", 0)),
+        percent=None if raw_percent is None else float(raw_percent),
     )
 
 

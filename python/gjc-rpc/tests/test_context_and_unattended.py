@@ -32,6 +32,19 @@ class TestContextUsage(unittest.TestCase):
         state = parse_session_state({"sessionId": "s1"})
         self.assertIsNone(state.context_usage)
 
+    def test_session_state_context_usage_null_after_compaction(self) -> None:
+        state = parse_session_state(
+            {
+                "sessionId": "s1",
+                "contextUsage": {"tokens": None, "contextWindow": 200000, "percent": None},
+            }
+        )
+        self.assertIsInstance(state.context_usage, ContextUsage)
+        assert state.context_usage is not None
+        self.assertIsNone(state.context_usage.tokens)
+        self.assertEqual(state.context_usage.context_window, 200000)
+        self.assertIsNone(state.context_usage.percent)
+
 
 class TestUnattendedAccepted(unittest.TestCase):
     def test_parse(self) -> None:
