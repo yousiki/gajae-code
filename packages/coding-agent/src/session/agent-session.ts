@@ -7243,7 +7243,17 @@ export class AgentSession {
 			addCandidate(this.#resolveRoleModelFull(role, availableModels, currentModel).model);
 		}
 
-		const sortedByContext = [...availableModels].sort((a, b) => b.contextWindow - a.contextWindow);
+		// Last-resort fallback: the largest-context model that shares the ACTIVE
+		// model's provider. Scoping this to the current provider keeps auto-
+		// compaction on the user's configured/custom route instead of silently
+		// defaulting to an unrelated provider (e.g. a stray OpenAI credential
+		// with no remaining credit) just because it happens to be in the bundled
+		// catalog. Cross-provider compaction stays possible, but only when the
+		// user opts in explicitly via modelRoles (handled by the loop above).
+		const fallbackProvider = currentModel?.provider;
+		const sortedByContext = [...availableModels]
+			.filter(model => fallbackProvider === undefined || model.provider === fallbackProvider)
+			.sort((a, b) => b.contextWindow - a.contextWindow);
 		for (const model of sortedByContext) {
 			if (!seen.has(this.#getModelKey(model))) {
 				addCandidate(model);
