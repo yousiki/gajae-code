@@ -52,6 +52,7 @@ import { resolveConfigValue } from "./config/resolve-config-value";
 import { getEmbeddedDefaultGjcSkills } from "./defaults/gjc-defaults";
 import { BUNDLED_GROK_BUILD_EXTENSION_ID, getBundledGrokBuildExtensionFactory } from "./defaults/gjc-grok-cli";
 import { initializeWithSettings } from "./discovery";
+import { disposeAllVmContexts, disposeVmContextsByOwner } from "./eval/js/context-manager";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { TtsrManager } from "./export/ttsr";
 import type { CustomCommandsLoadResult, LoadedCustomCommand } from "./extensibility/custom-commands";
@@ -570,6 +571,14 @@ function registerPythonCleanup(): void {
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
 }
 
+let jsVmCleanupRegistered = false;
+
+function registerJsVmCleanup(): void {
+	if (jsVmCleanupRegistered) return;
+	jsVmCleanupRegistered = true;
+	postmortem.register("js-vm-cleanup", disposeAllVmContexts);
+}
+
 /**
  * Resolve whether to enable append-only context mode based on the setting and provider.
  *
@@ -806,6 +815,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	registerSshCleanup();
 	registerPythonCleanup();
+	registerJsVmCleanup();
 
 	// Pin authStorage to modelRegistry.authStorage: ModelRegistry.getApiKey() routes refresh
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
@@ -2200,6 +2210,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				if (hasRegistered) agentRegistry.unregister(resolvedAgentId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
+				await disposeVmContextsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {
