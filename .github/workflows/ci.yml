@@ -233,6 +233,11 @@ jobs:
               bun packages/coding-agent/src/cli.ts --help
               bun packages/coding-agent/src/cli.ts team --help
               bun packages/coding-agent/src/cli.ts --smoke-test
+         - name: Smoke terminal native exports (FN01 Windows VT / FN02 TTY)
+           if: needs.relevance.outputs.relevant == 'true'
+           shell: pwsh
+           run: |
+              bun -e 'const n = await import("@gajae-code/natives"); for (const k of ["getTtyPath","enableWindowsVtInput","setConsoleInputMode"]) { if (typeof n[k] !== "function") throw new Error("missing native export: " + k); } const tty = n.getTtyPath(); if (tty !== null && typeof tty !== "string") throw new Error("getTtyPath returned a non-string, non-null value"); const r = n.enableWindowsVtInput(); if (typeof r.applied !== "boolean" || typeof r.previousMode !== "number") throw new Error("enableWindowsVtInput returned an unexpected shape"); if (r.applied) { n.setConsoleInputMode(r.previousMode); } console.log("terminal native exports OK", JSON.stringify({ ttyNull: tty === null, applied: r.applied }));'
 
    # Remaining platforms only ship in release tags; PRs and main never build them.
    native_release:

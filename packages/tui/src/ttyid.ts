@@ -1,36 +1,28 @@
-import { CString, dlopen, FFIType } from "bun:ffi";
-import * as fs from "node:fs";
-import * as os from "node:os";
+import * as natives from "@gajae-code/natives";
 
-/** Resolve the TTY device path for stdin (fd 0) via POSIX `ttyname(3)`. */
+// The `@gajae-code/natives` loader validates only the package version sentinel,
+// not that each individual export exists, so an older cached `.node` may not
+// expose `getTtyPath`. Treat it as optional and fall back to `null` when it is
+// unavailable, mirroring the previous non-fatal behavior.
+const nativeGetTtyPath = (natives as { getTtyPath?: () => string | null }).getTtyPath;
+
+/**
+ * Resolve the TTY device path for stdin (fd 0) via the native binding.
+ *
+ * Returns the device path (e.g. `/dev/pts/3`) on Linux/macOS, or `null` on
+ * Windows, non-TTY stdin (pipe/socket), or when the native export is
+ * unavailable. The native implementation owns the OS call; this wrapper keeps
+ * the lookup non-fatal.
+ */
 export function getTtyPath(): string | null {
-	if (os.platform() === "linux") {
-		// Linux: /proc/self/fd/0 is a symlink to /dev/pts/N
-		try {
-			const ttyPath = fs.readlinkSync("/proc/self/fd/0");
-			if (ttyPath.startsWith("/dev/")) {
-				return ttyPath;
-			}
-		} catch {
-			return null;
-		}
-	} else if (os.platform() !== "win32") {
-		try {
-			const libName = os.platform() === "darwin" ? "libSystem.B.dylib" : "libc.so.6";
-			const lib = dlopen(libName, {
-				ttyname: { args: [FFIType.i32], returns: FFIType.ptr },
-			});
-			try {
-				const result = lib.symbols.ttyname(0);
-				return result ? new CString(result).toString() : null;
-			} finally {
-				lib.close();
-			}
-		} catch {
-			return null;
-		}
+	if (typeof nativeGetTtyPath !== "function") {
+		return null;
 	}
-	return null;
+	try {
+		return nativeGetTtyPath();
+	} catch {
+		return null;
+	}
 }
 /**
  * Get a stable identifier for the current terminal.

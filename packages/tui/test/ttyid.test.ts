@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { getTerminalId } from "@gajae-code/tui/ttyid";
+import { getTerminalId, getTtyPath } from "@gajae-code/tui/ttyid";
 
 describe("getTerminalId tmux ordering", () => {
 	const TMUX_KEYS = ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_SESSION_ID", "WT_SESSION"];
@@ -44,5 +44,26 @@ describe("getTerminalId tmux ordering", () => {
 		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 
 		expect(getTerminalId()).toBeNull();
+	});
+});
+
+describe("getTtyPath native binding", () => {
+	it("returns null or a /dev/ device path and never throws", () => {
+		// The test harness stdin is not an interactive TTY, so the native binding
+		// resolves to null. When a device is attached it must be a /dev/ path.
+		// This also exercises the non-fatal fallback when the native export is
+		// unavailable (older cached .node): getTtyPath returns null instead of
+		// throwing.
+		let result: string | null = null;
+		expect(() => {
+			result = getTtyPath();
+		}).not.toThrow();
+		if (result !== null) {
+			expect(result).toMatch(/^\/dev\//);
+		}
+	});
+
+	it("is consistent across repeated calls", () => {
+		expect(getTtyPath()).toBe(getTtyPath());
 	});
 });

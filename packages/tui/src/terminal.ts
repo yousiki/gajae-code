@@ -1,5 +1,5 @@
-import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
+import * as natives from "@gajae-code/natives";
 import { $env, $flag } from "@gajae-code/utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
@@ -33,8 +33,15 @@ let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
 
-const STD_INPUT_HANDLE = -10;
-const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+// The `@gajae-code/natives` loader validates only the package version sentinel,
+// not that each individual export exists, so an older cached `.node` may lack
+// these symbols. Treat them as optional and degrade to a no-op.
+const nativeEnableWindowsVtInput = (
+	natives as { enableWindowsVtInput?: () => { applied: boolean; previousMode: number } }
+).enableWindowsVtInput;
+const nativeSetConsoleInputMode = (natives as { setConsoleInputMode?: (previousMode: number) => void })
+	.setConsoleInputMode;
+
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -143,7 +150,8 @@ export class ProcessTerminal implements Terminal {
 	#dead = false;
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#detachLogPath = $env.PI_TUI_TERMINAL_DETACH_LOG || "";
-	#windowsVTInputRestore?: () => void;
+	#windowsVTInputPreviousMode?: number;
+
 	#stdoutErrorHandler?: (err: Error) => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
@@ -243,44 +251,30 @@ export class ProcessTerminal implements Terminal {
 	#enableWindowsVTInput(): void {
 		if (process.platform !== "win32") return;
 		this.#restoreWindowsVTInput();
+		if (typeof nativeEnableWindowsVtInput !== "function") return;
 		try {
-			const kernel32 = dlopen("kernel32.dll", {
-				GetStdHandle: { args: [FFIType.i32], returns: FFIType.ptr },
-				GetConsoleMode: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
-				SetConsoleMode: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.bool },
-			});
-			const handle = kernel32.symbols.GetStdHandle(STD_INPUT_HANDLE);
-			const mode = new Uint32Array(1);
-			const modePtr = ptr(mode);
-			if (!modePtr || !kernel32.symbols.GetConsoleMode(handle, modePtr)) {
-				kernel32.close();
-				return;
+			const result = nativeEnableWindowsVtInput();
+			if (
+				result &&
+				typeof result.applied === "boolean" &&
+				typeof result.previousMode === "number" &&
+				result.applied
+			) {
+				this.#windowsVTInputPreviousMode = result.previousMode;
 			}
-			const originalMode = mode[0]!;
-			const vtMode = originalMode | ENABLE_VIRTUAL_TERMINAL_INPUT;
-			if (vtMode !== originalMode && !kernel32.symbols.SetConsoleMode(handle, vtMode)) {
-				kernel32.close();
-				return;
-			}
-			this.#windowsVTInputRestore = () => {
-				try {
-					kernel32.symbols.SetConsoleMode(handle, originalMode);
-				} finally {
-					kernel32.close();
-				}
-			};
 		} catch {
-			// bun:ffi unavailable or console API unsupported; keep startup non-fatal.
+			// Native console API unavailable or unsupported; keep startup non-fatal.
 		}
 	}
 
 	#restoreWindowsVTInput(): void {
 		if (process.platform !== "win32") return;
-		const restore = this.#windowsVTInputRestore;
-		this.#windowsVTInputRestore = undefined;
-		if (!restore) return;
+		const previousMode = this.#windowsVTInputPreviousMode;
+		this.#windowsVTInputPreviousMode = undefined;
+		if (previousMode === undefined) return;
+		if (typeof nativeSetConsoleInputMode !== "function") return;
 		try {
-			restore();
+			nativeSetConsoleInputMode(previousMode);
 		} catch {
 			// Ignore restore errors during terminal teardown.
 		}

@@ -414,6 +414,15 @@ export declare enum Ellipsis {
 }
 
 /**
+ * Enable `ENABLE_VIRTUAL_TERMINAL_INPUT` on the Windows stdin console.
+ *
+ * Returns the original console mode so the caller can restore it on teardown
+ * via [`set_console_input_mode`]. No-op off Windows (`applied = false`). All
+ * failures are non-fatal and reported as `applied = false`.
+ */
+export declare function enableWindowsVtInput(): WindowsVtInputResult
+
+/**
  * Encode image bytes into a SIXEL escape sequence for terminal rendering.
  *
  * The input image is decoded and resized to the requested pixel dimensions
@@ -518,6 +527,19 @@ export interface FuzzyFindResult {
 
 /** Get list of supported languages. */
 export declare function getSupportedLanguages(): Array<string>
+
+/**
+ * Resolve the TTY device path for stdin (fd 0).
+ *
+ * Mirrors the previous TypeScript behavior exactly:
+ * - **Linux**: `read_link("/proc/self/fd/0")`, returned only when it points
+ *   under `/dev/` (non-TTY / pipe / socket targets become `None`).
+ * - **Other Unix**: `ttyname(3)` on fd 0.
+ * - **Windows / other**: `None`.
+ *
+ * Never panics; OS failures and non-UTF8 paths return `None`.
+ */
+export declare function getTtyPath(): string | null
 
 /**
  * Get work profile data from the last N seconds.
@@ -1267,6 +1289,14 @@ export interface SearchResult {
   error?: string
 }
 
+/**
+ * Restore a previously captured Windows stdin console mode.
+ *
+ * No-op off Windows or when the stdin console handle is unavailable. Any
+ * failure is swallowed (best-effort restore).
+ */
+export declare function setConsoleInputMode(previousMode: number): void
+
 /** Options for executing a shell command via brush-core. */
 export interface ShellExecuteOptions {
   /** Command string to execute in the shell. */
@@ -1406,6 +1436,20 @@ export declare function truncateToWidth(text: string, maxWidth: number, ellipsis
  * Tabs count as a fixed-width cell.
  */
 export declare function visibleWidth(text: string, tabWidth: number): number
+
+/**
+ * Result of enabling Windows virtual-terminal input mode.
+ *
+ * `applied` is `true` when the console mode was read successfully (whether or
+ * not a change was actually needed). `previous_mode` carries the original
+ * console mode so the caller can restore it via [`set_console_input_mode`].
+ * Off Windows, or on any failure, `applied` is `false` and `previous_mode`
+ * is `0`.
+ */
+export interface WindowsVtInputResult {
+  applied: boolean
+  previousMode: number
+}
 
 /** Profiling results returned to JavaScript. */
 export interface WorkProfile {

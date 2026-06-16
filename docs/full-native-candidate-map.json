@@ -1,0 +1,108 @@
+{
+  "schema": "gjc.full-native-candidate-map/1",
+  "generatedBy": "ralplan full-native-offload-sweep",
+  "spec": ".gjc/specs/deep-interview-full-native-offload-sweep.md",
+  "plan": ".gjc/plans/ralplan/2026-06-15-1442-003e/pending-approval.md",
+  "method": "Within-policy ranking of native OS/process/filesystem binding candidates currently implemented in product TypeScript (raw bun:ffi / readlink / ad-hoc OS probing). Candidates qualify under scripts/check-rust-scope.ts (native bindings / OS-process-fs integration / measured hot paths) and follow docs/porting-to-natives.md. Speculative algorithmic TS->Rust ports are EXCLUDED unless they clear all six gates in docs/native-ffi-optimization-policy.md with profilerSelfTime evidence; none qualify today because the profiling corpus has zero profiler artifacts.",
+  "policyRefs": [
+    "docs/native-ffi-optimization-policy.md",
+    "docs/porting-to-natives.md",
+    "docs/natives-binding-contract.md",
+    "scripts/check-rust-scope.ts",
+    "docs/hotspot-map-successor.md"
+  ],
+  "gateLegend": {
+    "corpusEvidence": "gate 1: profiling-corpus trace shows user-visible latency/RSS impact",
+    "selfTimeAttribution": "gate 2: profilerSelfTime artifact (or fallback-toggle) attributes the cost",
+    "measuredFfiOverhead": "gate 3: N-API/marshalling overhead measured vs JS/TS baseline",
+    "representativeWin": "gate 4: representative p50/p95 win on realistic inputs",
+    "behaviorParity": "gate 5: byte/behavior parity across rendered/persisted/provider/observable output",
+    "operationalCost": "gate 6: fallback, packaging, and rollback cost documented",
+    "statuses": "pass | fail | not-run | not-required | blocked"
+  },
+  "exclusions": [
+    "Architectural JS-surface-shrink without a native-binding / OS-process-fs / measured-hot-path rationale (non-goal per the approved spec).",
+    "Algorithmic TS->Rust ports without a profilerSelfTime artifact (gate 2 currently unsatisfiable: docs/perf-profiling-corpus.md records zero captured profiler artifacts).",
+    "Closed cpu-hotspot-map.json backlog (H01-H11, M01-M05) unless a future PR clears gates 1-6 with fresh corpus evidence; see docs/hotspot-map-successor.md. Do not reopen it as an implementation backlog.",
+    "Already-native platform/system primitives (grep, fd/glob, text width/wrap/slice, highlight, html->md, countTokens, ast, ps/pty/shell, sixel, clipboard, xxHash, JSON.parse/stringify).",
+    "Implementation of FN03 (file-lock) and FN04 (which) in this sweep; both are listed as deferred candidates with a nextEvidenceAction."
+  ],
+  "candidates": [
+    {
+      "id": "FN01",
+      "rank": 1,
+      "package": "tui",
+      "file": "packages/tui/src/terminal.ts",
+      "symbol": "ProcessTerminal.#enableWindowsVTInput / #restoreWindowsVTInput",
+      "policyClass": "native-binding: OS console mode (Windows kernel32 GetStdHandle/GetConsoleMode/SetConsoleMode)",
+      "rationale": "Currently ad-hoc bun:ffi dlopen of kernel32 in product TS. Moving the OS-call boundary into pi-natives consolidates platform integration behind the sanctioned N-API surface and removes ad-hoc FFI from product code. This is a native-binding rationale, not a speculative perf port, so the FFI optimization gates (1-4) are not required.",
+      "gateChecklist": {
+        "corpusEvidence": { "status": "not-required", "note": "native OS binding, not a leftover algorithmic hot path" },
+        "selfTimeAttribution": { "status": "not-required", "note": "no perf claim; consolidation of an OS boundary" },
+        "measuredFfiOverhead": { "status": "not-required", "note": "runs once at terminal setup/teardown, not in a hot loop" },
+        "representativeWin": { "status": "not-required", "note": "no p50/p95 perf claim" },
+        "behaviorParity": { "status": "required", "note": "console-mode enable/restore must reproduce prior behavior; non-fatal on failure; verified by win32 CI build/load/shape/no-throw + conditional restore" },
+        "operationalCost": { "status": "required", "note": "guarded lazy native lookup keeps TS usable if exports absent; rollback = revert callsites/PR; packaging via existing pi-natives addon" }
+      },
+      "decision": "land-now",
+      "nextEvidenceAction": "Add a Windows CI exercise in .github/workflows/ci.yml verifying build/load/export-shape/no-throw for enableWindowsVtInput and conditional restore via setConsoleInputMode when applied is true. Do not claim real console-mode bit toggling on windows-latest (GHA console may be non-interactive)."
+    },
+    {
+      "id": "FN02",
+      "rank": 2,
+      "package": "tui",
+      "file": "packages/tui/src/ttyid.ts",
+      "symbol": "getTtyPath",
+      "policyClass": "native-binding: OS TTY/filesystem (Linux readlink /proc/self/fd/0; POSIX ttyname(3))",
+      "rationale": "Currently Linux readlinkSync + bun:ffi dlopen of libSystem/libc ttyname in product TS. The OS TTY lookup belongs behind @gajae-code/natives; getTerminalId keeps its tmux/env fallback policy in TS.",
+      "gateChecklist": {
+        "corpusEvidence": { "status": "not-required", "note": "native OS binding, not a leftover algorithmic hot path" },
+        "selfTimeAttribution": { "status": "not-required", "note": "no perf claim" },
+        "measuredFfiOverhead": { "status": "not-required", "note": "called rarely (terminal identity resolution)" },
+        "representativeWin": { "status": "not-required", "note": "no p50/p95 perf claim" },
+        "behaviorParity": { "status": "required", "note": "identical device-path string on Linux/macOS; null on win32/non-TTY/pipe; preserve the /dev/ prefix filter that getTerminalId depends on" },
+        "operationalCost": { "status": "required", "note": "guarded lazy native lookup returns null if export absent; rollback = revert callsites/PR" }
+      },
+      "decision": "land-now",
+      "nextEvidenceAction": "Add POSIX CI tests for ttyname/readlink parity and a cross-platform behavioral test asserting getTtyPath() returns null on non-TTY stdin on every CI platform."
+    },
+    {
+      "id": "FN03",
+      "rank": 3,
+      "package": "coding-agent",
+      "file": "packages/coding-agent/src/config/file-lock.ts",
+      "symbol": "withFileLock / acquireLock / ownerLiveness",
+      "policyClass": "native-binding: filesystem lock + process liveness (flock/fcntl/LockFileEx)",
+      "rationale": "Current TS directory-lock protocol (fs.mkdir lock dir + process.kill(pid,0) liveness) has a documented read->unlink race because POSIX has no atomic compare-and-delete for the directory protocol. A native primitive could expose platform locking/liveness while TS keeps stale/retry/audit policy.",
+      "gateChecklist": {
+        "corpusEvidence": { "status": "not-run", "note": "design-sensitive; defer" },
+        "selfTimeAttribution": { "status": "not-run", "note": "no perf claim intended; correctness-motivated" },
+        "measuredFfiOverhead": { "status": "not-run", "note": "deferred" },
+        "representativeWin": { "status": "not-run", "note": "deferred" },
+        "behaviorParity": { "status": "not-run", "note": "cross-platform lock semantics + stale-owner handling must be specified first" },
+        "operationalCost": { "status": "not-run", "note": "rollback/fallback for established directory-lock semantics must be documented" }
+      },
+      "decision": "deferred",
+      "nextEvidenceAction": "Write a follow-up design comparing flock/fcntl vs LockFileEx semantics, stale-owner handling, timeout behavior, and rollback; get owner sign-off before opening a native PR."
+    },
+    {
+      "id": "FN04",
+      "rank": 4,
+      "package": "utils",
+      "file": "packages/utils/src/which.ts",
+      "symbol": "$which / darwinWhich / getMacosToolPaths",
+      "policyClass": "native-binding: executable resolver / OS path & toolchain discovery",
+      "rationale": "$which wraps Bun.which (already native for the normal path) but adds macOS Xcode/CLT discovery (reads $DEVELOPER_DIR, /var/db/xcode_select_link, scans toolchain usr/bin). A native export could consolidate platform executable resolution, but Bun.which already covers the common path, so priority is lower.",
+      "gateChecklist": {
+        "corpusEvidence": { "status": "not-run", "note": "deferred" },
+        "selfTimeAttribution": { "status": "not-run", "note": "no perf claim" },
+        "measuredFfiOverhead": { "status": "not-run", "note": "deferred" },
+        "representativeWin": { "status": "not-run", "note": "deferred" },
+        "behaviorParity": { "status": "not-run", "note": "must define exact PATH/PATHEXT/toolchain parity vs current TS + Bun.which" },
+        "operationalCost": { "status": "not-run", "note": "deferred" }
+      },
+      "decision": "deferred",
+      "nextEvidenceAction": "Capture concrete cases where Bun.which is insufficient and define exact PATH/PATHEXT/toolchain-discovery parity before proposing a native resolver PR."
+    }
+  ]
+}
