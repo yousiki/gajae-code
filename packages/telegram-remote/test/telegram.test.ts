@@ -47,6 +47,21 @@ const callbackUpdate = {
 	callback_query: { id: "cbq", data: "gtr:v1:tok", from: { id: 100 }, message: { message_id: 5, chat: { id: 100 } } },
 };
 
+async function sendWithResult(
+	apiResult: unknown,
+): Promise<{ result: { ok: boolean; retryAfterMs?: number }; calls: RecordedCall[] }> {
+	const calls: RecordedCall[] = [];
+	const fetchImpl = (async (url: string, init?: { body?: string }) => {
+		const method = String(url).split("/").pop() ?? "";
+		const body = init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+		calls.push({ method, body });
+		return jsonResponse(apiResult);
+	}) as unknown as typeof fetch;
+	const transport = new TelegramBotApiTransport({ botToken: "t", fetchImpl, registerBotCommands: false });
+	const result = await transport.send({ chatId: "100", reply: { kind: "chat", text: "hello", parseMode: "HTML" } });
+	return { result, calls };
+}
+
 describe("TelegramBotApiTransport", () => {
 	test("long-polls with callback_query in allowed_updates and registers a hyphen-free command menu", async () => {
 		const calls = await runOnce([], async () => "", { registerBotCommands: true });
@@ -151,5 +166,17 @@ describe("TelegramBotApiTransport", () => {
 		// Oversized data is surfaced with an empty `data` so the gateway answer-onlys it as unknown.
 		const got = received[0];
 		expect(got?.kind === "callback_query" && got.data).toBe("");
+	});
+
+	test("send() posts sendMessage with reply body and returns ok true", async () => {
+		const { result, calls } = await sendWithResult({ ok: true, result: { message_id: 1 } });
+		expect(result).toEqual({ ok: true });
+		expect(calls).toEqual([{ method: "sendMessage", body: { chat_id: "100", text: "hello", parse_mode: "HTML" } }]);
+	});
+
+	test("send() converts Telegram retry_after seconds to retryAfterMs", async () => {
+		const { result, calls } = await sendWithResult({ ok: false, parameters: { retry_after: 3 } });
+		expect(result).toEqual({ ok: false, retryAfterMs: 3000 });
+		expect(calls[0]?.method).toBe("sendMessage");
 	});
 });

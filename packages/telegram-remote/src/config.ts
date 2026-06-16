@@ -15,6 +15,8 @@ const DEFAULT_COORDINATOR_ARGS = ["mcp-serve", "coordinator"];
 const WORKDIR_ROOT_SEPARATOR = ":";
 const DEFAULT_FOLLOW_TTL_MS = 86_400_000;
 const DEFAULT_SUBSCRIPTIONS_MAX = 1000;
+const DEFAULT_LONG_POLL_MS = 25_000;
+const DEFAULT_DIGEST_THRESHOLD = 5;
 
 /** Fully resolved configuration for {@link runService}. */
 export interface ServiceConfig {
@@ -30,6 +32,8 @@ export interface ServiceConfig {
 	/** Enable proactive Follow push plumbing. Default false. */
 	enablePush: boolean;
 	subscriptionsMax: number;
+	longPollMs: number;
+	digestThreshold: number;
 	policy: GatewayPolicy;
 	coordinator: McpStdioOptions;
 }
@@ -161,6 +165,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseClampedPositiveInt(value: string | undefined, fallback: number, max: number): number {
+	return Math.min(parsePositiveInt(value, fallback), max);
+}
+
 /** Build the full service config from environment variables. */
 export function loadConfigFromEnv(env: Env): ServiceConfig {
 	const botToken = required(env, "GJC_TELEGRAM_REMOTE_BOT_TOKEN");
@@ -198,6 +206,8 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 		followTtlMs: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_FOLLOW_TTL_MS, DEFAULT_FOLLOW_TTL_MS),
 		enablePush: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ENABLE_PUSH, false),
 		subscriptionsMax: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_SUBSCRIPTIONS_MAX, DEFAULT_SUBSCRIPTIONS_MAX),
+		longPollMs: parseClampedPositiveInt(env.GJC_TELEGRAM_REMOTE_WATCH_TIMEOUT_MS, DEFAULT_LONG_POLL_MS, 30_000),
+		digestThreshold: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_DIGEST_THRESHOLD, DEFAULT_DIGEST_THRESHOLD),
 		policy: {
 			allowedUserIds,
 			allowedChatIds,

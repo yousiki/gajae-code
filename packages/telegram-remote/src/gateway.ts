@@ -17,6 +17,7 @@ import {
 	activeTurnId,
 	escapeHtml,
 	findSessionView,
+	formatRelativeTime,
 	isTerminalStatus,
 	isWithinRetention,
 	projectSessionRows,
@@ -26,6 +27,7 @@ import {
 	renderSessionView,
 	renderSessionViewHtml,
 } from "./projection";
+import type { SubscriptionStore } from "./subscriptions";
 import {
 	type CallbackTokenRecord,
 	CallbackTokenStore,
@@ -73,6 +75,8 @@ export interface GatewayPolicy {
 	richCallbackTtlMs?: number;
 	/** Max in-memory callback tokens. Default 500. */
 	richCallbackMaxTokens?: number;
+	/** Enable proactive Follow/Mute push controls. Default false. */
+	enablePush?: boolean;
 }
 
 /** Runtime dependencies for the gateway. */
@@ -80,6 +84,7 @@ export interface GatewayDeps {
 	coordinator: CoordinatorClient;
 	/** Injectable clock for deterministic confirmation-expiry tests. */
 	now?: () => number;
+	subscriptions?: SubscriptionStore;
 }
 
 type CallbackContext = { chatId: string; userId: string | null };
@@ -100,6 +105,7 @@ export class TelegramRemoteGateway {
 	private readonly coordinator: CoordinatorClient;
 	private readonly now: () => number;
 	private readonly tokens: CallbackTokenStore;
+	private readonly subscriptions?: SubscriptionStore;
 	/** Pending text `/stop` confirmations keyed by `${chatId}:${sessionId}` → expiry ms. */
 	private readonly pendingStops = new Map<string, number>();
 	private readonly pendingPresetTasks = new Map<string, { presetId: string; expiresAt: number }>();
@@ -108,6 +114,7 @@ export class TelegramRemoteGateway {
 		this.policy = policy;
 		this.coordinator = deps.coordinator;
 		this.now = deps.now ?? Date.now;
+		this.subscriptions = deps.subscriptions;
 		this.tokens = new CallbackTokenStore({ now: this.now, maxTokens: policy.richCallbackMaxTokens });
 	}
 
@@ -251,6 +258,10 @@ export class TelegramRemoteGateway {
 			// Observe from a list row edits the originating list message in place (no sticky focus).
 			case "refresh_observe":
 				return this.callbackObserve(record, ctx, update.messageId);
+			case "follow":
+				return this.callbackFollow(record, ctx);
+			case "mute":
+				return this.callbackMute(record, ctx);
 			case "stop_arm":
 				return this.callbackStopArm(record, ctx);
 			case "stop_confirm":
@@ -319,6 +330,28 @@ export class TelegramRemoteGateway {
 		return reply;
 	}
 
+	private async callbackFollow(
+		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
+		ctx: CallbackContext,
+	): Promise<OutgoingReply> {
+		if (!this.pushEnabled || !this.subscriptions) return this.answerOnly(MESSAGES.callbackInvalid);
+		const status = await this.coordinator.getCoordinationStatus();
+		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
+		const view = findSessionView(status, record.sessionId);
+		if (!view) return this.answerOnly(MESSAGES.unknownSession);
+		await this.subscriptions.follow({ sessionId: record.sessionId, chatId: ctx.chatId, userId: ctx.userId });
+		return this.answerOnly(MESSAGES.following);
+	}
+
+	private async callbackMute(
+		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
+		ctx: CallbackContext,
+	): Promise<OutgoingReply> {
+		if (!this.pushEnabled || !this.subscriptions) return this.answerOnly(MESSAGES.callbackInvalid);
+		await this.subscriptions.mute({ sessionId: record.sessionId, chatId: ctx.chatId });
+		return this.answerOnly(MESSAGES.muted);
+	}
+
 	private async callbackStopArm(
 		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
 		ctx: CallbackContext,
@@ -377,6 +410,18 @@ export class TelegramRemoteGateway {
 	}
 
 	// --- Rendering + keyboards ---
+
+	public renderNotificationCard(rawSessionId: string, view: SessionView, ctx: CallbackContext): ChatReply {
+		const activity = view.lastActivityAt
+			? ` Last activity ${formatRelativeTime(view.lastActivityAt, this.now())}.`
+			: "";
+		return {
+			kind: "chat",
+			text: `Session <b>${escapeHtml(view.name)}</b> is <b>${view.status}</b>.${activity}`,
+			parseMode: "HTML",
+			replyMarkup: this.notificationKeyboard(rawSessionId, ctx),
+		};
+	}
 
 	private viewReply(view: SessionView, rawSessionId: string, ctx: CallbackContext): ChatReply {
 		if (!this.rich) return this.chat(renderSessionView(view, this.now()));
@@ -456,6 +501,10 @@ export class TelegramRemoteGateway {
 			const row: TelegramInlineKeyboardButton[] = [
 				{ text: `Observe ${name}`, callbackData: this.issue("observe", rawSessionId, ctx, this.richTtl) },
 			];
+			if (this.pushEnabled) {
+				row.push({ text: `Follow ${name}`, callbackData: this.issue("follow", rawSessionId, ctx, this.richTtl) });
+				row.push({ text: `Mute ${name}`, callbackData: this.issue("mute", rawSessionId, ctx, this.richTtl) });
+			}
 			if (this.policy.enableStop) {
 				row.push({ text: `Stop ${name}`, callbackData: this.issue("stop_arm", rawSessionId, ctx, this.richTtl) });
 			}
@@ -500,6 +549,21 @@ export class TelegramRemoteGateway {
 		const row: TelegramInlineKeyboardButton[] = [
 			{ text: "Refresh", callbackData: this.issue("refresh_observe", rawSessionId, ctx, this.richTtl) },
 		];
+		if (this.pushEnabled) {
+			row.push({ text: "Follow", callbackData: this.issue("follow", rawSessionId, ctx, this.richTtl) });
+			row.push({ text: "Mute", callbackData: this.issue("mute", rawSessionId, ctx, this.richTtl) });
+		}
+		if (this.policy.enableStop) {
+			row.push({ text: "Stop", callbackData: this.issue("stop_arm", rawSessionId, ctx, this.richTtl) });
+		}
+		return { inline_keyboard: [row] };
+	}
+
+	private notificationKeyboard(rawSessionId: string, ctx: CallbackContext): TelegramInlineKeyboardMarkup {
+		const row: TelegramInlineKeyboardButton[] = [
+			{ text: "Observe", callbackData: this.issue("observe", rawSessionId, ctx, this.richTtl) },
+			{ text: "Mute", callbackData: this.issue("mute", rawSessionId, ctx, this.richTtl) },
+		];
 		if (this.policy.enableStop) {
 			row.push({ text: "Stop", callbackData: this.issue("stop_arm", rawSessionId, ctx, this.richTtl) });
 		}
@@ -543,6 +607,10 @@ export class TelegramRemoteGateway {
 
 	private get rich(): boolean {
 		return this.policy.enableRichMessages ?? false;
+	}
+
+	private get pushEnabled(): boolean {
+		return (this.policy.enablePush ?? false) && this.subscriptions !== undefined;
 	}
 
 	private get confirmTtl(): number {

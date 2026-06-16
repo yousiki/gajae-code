@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { type GatewayPolicy, TelegramRemoteGateway } from "../src/gateway";
 import { MESSAGES, UNAUTHORIZED_REFUSAL } from "../src/messages";
+import { SubscriptionStore } from "../src/subscriptions";
 import type { ChatReply, CoordinationStatus, OutgoingReply, TelegramInlineKeyboardButton } from "../src/types";
 import { callback, FakeCoordinatorClient, message, preset, presetMap } from "./helpers";
 
@@ -442,6 +443,86 @@ describe("rich messaging + callbacks", () => {
 		const confirm = buttons(arm).find(b => b.text === "Confirm stop")!;
 		await gateway.handleUpdate(callback({ data: confirm.callbackData }));
 		expect(coordinator.calls.at(-1)?.args).toMatchObject({ sessionId: LONG_ID, status: "cancelled" });
+	});
+});
+
+describe("push follow/mute controls", () => {
+	test("Follow and Mute buttons appear only when push and subscriptions are enabled", async () => {
+		coordinator.status = longStatus();
+		const withoutStore = makeGateway({ enableRichMessages: true, enablePush: true });
+		const noPush = asChat(await withoutStore.handleUpdate(message({ text: "/sessions" })));
+		expect(buttons(noPush).find(b => b.text.startsWith("Follow"))).toBeUndefined();
+
+		const subscriptions = await SubscriptionStore.load({
+			filePath: `/tmp/gtr-gateway-${Date.now()}-a.json`,
+			now: () => clock,
+		});
+		const gateway = new TelegramRemoteGateway(
+			{
+				allowedUserIds: new Set(["100"]),
+				allowedChatIds: new Set(["900"]),
+				presets: presetMap(),
+				enableStop: true,
+				enableRichMessages: true,
+				enablePush: true,
+			},
+			{ coordinator, now: () => clock, subscriptions },
+		);
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		expect(buttons(reply).find(b => b.text.startsWith("Follow"))).toBeDefined();
+		expect(buttons(reply).find(b => b.text.startsWith("Mute"))).toBeDefined();
+	});
+
+	test("Follow callback stores subscription and Mute removes it", async () => {
+		coordinator.status = longStatus();
+		const subscriptions = await SubscriptionStore.load({
+			filePath: `/tmp/gtr-gateway-${Date.now()}-b.json`,
+			now: () => clock,
+		});
+		const gateway = new TelegramRemoteGateway(
+			{
+				allowedUserIds: new Set(["100"]),
+				allowedChatIds: new Set(["900"]),
+				presets: presetMap(),
+				enableStop: true,
+				enableRichMessages: true,
+				enablePush: true,
+			},
+			{ coordinator, now: () => clock, subscriptions },
+		);
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		const follow = buttons(reply).find(b => b.text.startsWith("Follow"))!;
+		const followed = await gateway.handleUpdate(callback({ data: follow.callbackData }));
+		expect(followed.kind).toBe("callback_answer");
+		expect(await subscriptions.followers(LONG_ID)).toHaveLength(1);
+		const observe = asChat(await gateway.handleUpdate(message({ text: `/observe ${LONG_ID}` })));
+		const mute = buttons(observe).find(b => b.text === "Mute")!;
+		await gateway.handleUpdate(callback({ data: mute.callbackData }));
+		expect(await subscriptions.followers(LONG_ID)).toHaveLength(0);
+	});
+
+	test("unauthorized follow and mute are answer-only and do not mutate", async () => {
+		coordinator.status = longStatus();
+		const subscriptions = await SubscriptionStore.load({
+			filePath: `/tmp/gtr-gateway-${Date.now()}-c.json`,
+			now: () => clock,
+		});
+		const gateway = new TelegramRemoteGateway(
+			{
+				allowedUserIds: new Set(["100"]),
+				allowedChatIds: new Set(["900"]),
+				presets: presetMap(),
+				enableStop: true,
+				enableRichMessages: true,
+				enablePush: true,
+			},
+			{ coordinator, now: () => clock, subscriptions },
+		);
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		const follow = buttons(reply).find(b => b.text.startsWith("Follow"))!;
+		const denied = await gateway.handleUpdate(callback({ userId: "999", chatId: "999", data: follow.callbackData }));
+		expect(denied.kind).toBe("callback_answer");
+		expect(await subscriptions.followers(LONG_ID)).toHaveLength(0);
 	});
 });
 

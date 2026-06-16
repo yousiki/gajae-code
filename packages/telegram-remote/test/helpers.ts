@@ -9,10 +9,12 @@ import type {
 	ReportStatusResult,
 	StartSessionResult,
 	TelegramTransport,
+	WatchEventsInput,
+	WatchEventsResult,
 } from "../src/types";
 
 export interface RecordedCall {
-	method: "getCoordinationStatus" | "startSession" | "reportStatus";
+	method: "getCoordinationStatus" | "startSession" | "reportStatus" | "watchEvents";
 	args: unknown;
 }
 
@@ -21,6 +23,7 @@ export class FakeCoordinatorClient implements CoordinatorClient {
 	status: CoordinationStatus = { ok: true, sessions: [], sessionStates: [], turns: [] };
 	startResult: StartSessionResult = { ok: true, sessionId: "sess-1" };
 	reportResult: ReportStatusResult = { ok: true };
+	watchScript: WatchEventsResult[] = [];
 	calls: RecordedCall[] = [];
 
 	async getCoordinationStatus(): Promise<CoordinationStatus> {
@@ -43,6 +46,11 @@ export class FakeCoordinatorClient implements CoordinatorClient {
 		return this.reportResult;
 	}
 
+	async watchEvents(input: WatchEventsInput): Promise<WatchEventsResult> {
+		this.calls.push({ method: "watchEvents", args: input });
+		return this.watchScript.shift() ?? { ok: true, events: [], latestSeq: input.afterSeq, timedOut: false };
+	}
+
 	countOf(method: RecordedCall["method"]): number {
 		return this.calls.filter(call => call.method === method).length;
 	}
@@ -58,6 +66,8 @@ export function replyText(reply: OutgoingReply | string): string {
 /** Drives a scripted list of inbound updates through the gateway and records replies. */
 export class FakeTransport implements TelegramTransport {
 	sent: Array<{ chatId: string | null; reply: OutgoingReply | string; text: string }> = [];
+	outbound: Array<{ chatId: string; reply: import("../src/types").ChatReply }> = [];
+	sendScript: Array<{ ok: boolean; retryAfterMs?: number }> = [];
 	constructor(private readonly inbox: IncomingUpdate[]) {}
 
 	async run(onUpdate: (update: IncomingUpdate) => Promise<OutgoingReply | string>): Promise<void> {
@@ -65,6 +75,14 @@ export class FakeTransport implements TelegramTransport {
 			const reply = await onUpdate(update);
 			this.sent.push({ chatId: update.chatId, reply, text: replyText(reply) });
 		}
+	}
+
+	async send(message: {
+		chatId: string;
+		reply: import("../src/types").ChatReply;
+	}): Promise<{ ok: boolean; retryAfterMs?: number }> {
+		this.outbound.push(message);
+		return this.sendScript.shift() ?? { ok: true };
 	}
 
 	stop(): void {}

@@ -46,6 +46,9 @@ export const MESSAGES = {
 	callbackExpired: "Expired — send /sessions again.",
 	callbackInvalid: "That button is no longer valid.",
 	callbackCancelled: "Cancelled.",
+	following: "Following.",
+	muted: "Muted.",
+	pushUnavailable: "Notifications are unavailable.",
 
 	noPresets: "No presets configured.",
 	presetNeedsTask: "Send the task for this preset.",

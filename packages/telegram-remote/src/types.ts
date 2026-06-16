@@ -162,6 +162,29 @@ export interface ReportStatusResult {
 	reason?: string;
 }
 
+/** Hostile coordinator event reduced to routing-only fields. */
+export interface CoordinatorRoutingEvent {
+	seq: number;
+	kind: string;
+	sessionId: string | null;
+}
+
+export interface WatchEventsInput {
+	afterSeq: number;
+	sessionId?: string;
+	eventTypes?: string[];
+	timeoutMs?: number;
+	limit?: number;
+}
+
+export interface WatchEventsResult {
+	ok: boolean;
+	reason?: string;
+	events: CoordinatorRoutingEvent[];
+	latestSeq: number;
+	timedOut: boolean;
+}
+
 /**
  * The only contract the gateway has with the session backend. Both text commands
  * and inline-keyboard callbacks map onto these same bounded operations; the MCP
@@ -180,6 +203,8 @@ export interface CoordinatorClient {
 		status: "cancelled";
 		summary?: string;
 	}): Promise<ReportStatusResult>;
+	/** Watches hostile raw coordinator events, exposing only routing fields. */
+	watchEvents?(input: WatchEventsInput): Promise<WatchEventsResult>;
 	/** Release any underlying process. Optional for in-memory implementations. */
 	close?(): Promise<void>;
 }
@@ -190,4 +215,6 @@ export interface TelegramTransport {
 	run(onUpdate: (update: IncomingUpdate) => Promise<OutgoingReply | string>): Promise<void>;
 	/** Stop the receive loop. */
 	stop(): void;
+	/** Optional outbound send port for notifier-driven messages. */
+	send?(message: { chatId: string; reply: ChatReply }): Promise<{ ok: boolean; retryAfterMs?: number }>;
 }

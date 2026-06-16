@@ -31,6 +31,35 @@ function toolPayload(name: string, args: Record<string, unknown>): Record<string
 				return { ok: false, reason: "coordinator_mutation_call_not_allowed:reports" };
 			}
 			return { ok: true, report: { status: args.status, turn_id: args.turn_id ?? null } };
+		case "gjc_coordinator_watch_events":
+			if (
+				args.after_seq !== 7 ||
+				args.session_id !== "sess-1" ||
+				!Array.isArray(args.event_types) ||
+				args.event_types[0] !== "turn.completed" ||
+				args.timeout_ms !== 30000 ||
+				args.limit !== 100
+			) {
+				return { ok: false, reason: "bad_watch_args", args };
+			}
+			return {
+				ok: true,
+				events: [
+					{
+						seq: 8,
+						kind: "turn.completed",
+						session_id: "sess-1",
+						summary: "HOSTILE SUMMARY MUST NOT ESCAPE",
+						metadata: { secret: "HOSTILE METADATA MUST NOT ESCAPE" },
+						payload_ref: "HOSTILE_PAYLOAD_REF",
+					},
+					{ seq: 9, kind: "session.state_changed", session_id: "" },
+					{ seq: 10, session_id: "sess-2", summary: "missing kind" },
+					{ seq: -1, kind: "turn.failed", session_id: "sess-3" },
+				],
+				latest_seq: 10,
+				timed_out: true,
+			};
 		default:
 			return { ok: false, reason: "unknown_tool", tool: name };
 	}

@@ -35,9 +35,44 @@ describe("McpStdioCoordinatorClient (real subprocess JSON-RPC)", () => {
 		expect(result).toEqual({ ok: true });
 	});
 
+	test("watches hostile raw events with clamped snake_case args and routing-only output", async () => {
+		const result = await makeClient().watchEvents({
+			afterSeq: 7,
+			sessionId: "sess-1",
+			eventTypes: ["turn.completed"],
+			timeoutMs: 45000,
+			limit: 500,
+		});
+		expect(result).toEqual({
+			ok: true,
+			events: [
+				{ seq: 8, kind: "turn.completed", sessionId: "sess-1" },
+				{ seq: 9, kind: "session.state_changed", sessionId: null },
+			],
+			latestSeq: 10,
+			timedOut: true,
+		});
+		const serialized = JSON.stringify(result.events);
+		expect(serialized).not.toContain("summary");
+		expect(serialized).not.toContain("metadata");
+		expect(serialized).not.toContain("payload_ref");
+		expect(serialized).not.toContain("HOSTILE");
+	});
+
 	test("returns coordinator_unreachable when the subprocess cannot be spawned", async () => {
 		const status = await makeClient("gjc-telegram-remote-no-such-binary", []).getCoordinationStatus();
 		expect(status.ok).toBe(false);
 		expect(status.reason).toBe("coordinator_unreachable");
+	});
+
+	test("watchEvents returns coordinator_unreachable with input cursor on subprocess errors", async () => {
+		const result = await makeClient("gjc-telegram-remote-no-such-binary", []).watchEvents({ afterSeq: 42 });
+		expect(result).toEqual({
+			ok: false,
+			reason: "coordinator_unreachable",
+			events: [],
+			latestSeq: 42,
+			timedOut: false,
+		});
 	});
 });

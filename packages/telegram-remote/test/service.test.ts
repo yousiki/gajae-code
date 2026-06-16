@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ServiceConfig } from "../src/config";
 import { MESSAGES, UNAUTHORIZED_REFUSAL } from "../src/messages";
 import { runService } from "../src/service";
 import type { CoordinationStatus, IncomingUpdate } from "../src/types";
-import { FakeCoordinatorClient, FakeTransport, preset, presetMap } from "./helpers";
+import { FakeCoordinatorClient, FakeTransport, message, preset, presetMap } from "./helpers";
 
 function serviceConfig(overrides: Partial<ServiceConfig["policy"]> = {}): ServiceConfig {
 	return {
@@ -14,6 +17,8 @@ function serviceConfig(overrides: Partial<ServiceConfig["policy"]> = {}): Servic
 		followTtlMs: 86_400_000,
 		enablePush: false,
 		subscriptionsMax: 1000,
+		longPollMs: 1,
+		digestThreshold: 5,
 		policy: {
 			allowedUserIds: new Set(["100"]),
 			allowedChatIds: new Set(),
@@ -77,4 +82,36 @@ describe("runService end-to-end (fake transport + fake coordinator)", () => {
 			expect(reply.text).toContain("<code>");
 		}
 	});
+});
+
+test("push disabled by default exposes no Follow buttons and starts no notifier", async () => {
+	const coordinator = new FakeCoordinatorClient();
+	coordinator.status = liveStatus();
+	const transport = new FakeTransport([message({ text: "/sessions" })]);
+	await runService(serviceConfig({ enableRichMessages: true }), { coordinator, transport });
+	expect(transport.sent[0]?.text).not.toContain("Follow");
+	expect(transport.outbound).toHaveLength(0);
+	expect(coordinator.countOf("watchEvents")).toBe(0);
+});
+
+test("push enabled without stateDir fails safe: no notifier and no Follow buttons", async () => {
+	const coordinator = new FakeCoordinatorClient();
+	coordinator.status = liveStatus();
+	const transport = new FakeTransport([message({ text: "/sessions" })]);
+	await runService({ ...serviceConfig({ enableRichMessages: true }), enablePush: true }, { coordinator, transport });
+	expect(transport.sent[0]?.text).not.toContain("Follow");
+	expect(coordinator.countOf("watchEvents")).toBe(0);
+});
+
+test("push enabled with stateDir starts notifier", async () => {
+	const coordinator = new FakeCoordinatorClient();
+	coordinator.status = liveStatus();
+	coordinator.watchScript = [{ ok: true, events: [], latestSeq: 0, timedOut: true }];
+	const transport = new FakeTransport([]);
+	const stateDir = await mkdtemp(join(tmpdir(), "gtr-service-"));
+	await runService(
+		{ ...serviceConfig({ enableRichMessages: true }), enablePush: true, stateDir },
+		{ coordinator, transport },
+	);
+	expect(coordinator.countOf("watchEvents")).toBeGreaterThan(0);
 });

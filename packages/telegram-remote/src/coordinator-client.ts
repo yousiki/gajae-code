@@ -6,7 +6,16 @@
  */
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import type { CoordinationStatus, CoordinatorClient, RawRecord, ReportStatusResult, StartSessionResult } from "./types";
+import type {
+	CoordinationStatus,
+	CoordinatorClient,
+	CoordinatorRoutingEvent,
+	RawRecord,
+	ReportStatusResult,
+	StartSessionResult,
+	WatchEventsInput,
+	WatchEventsResult,
+} from "./types";
 
 const COORDINATOR_MCP_PROTOCOL_VERSION = "2024-11-05";
 
@@ -40,6 +49,20 @@ function asRecord(value: unknown): RawRecord | null {
 
 function reasonOf(payload: RawRecord): string | undefined {
 	return typeof payload.reason === "string" ? payload.reason : undefined;
+}
+
+function asPositiveFiniteNumber(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function parseRoutingEvent(value: unknown): CoordinatorRoutingEvent | null {
+	const event = asRecord(value);
+	if (!event) return null;
+	const seq = asPositiveFiniteNumber(event.seq);
+	const kind = typeof event.kind === "string" && event.kind.length > 0 ? event.kind : null;
+	if (seq === null || kind === null) return null;
+	const sessionId = typeof event.session_id === "string" && event.session_id.length > 0 ? event.session_id : null;
+	return { seq, kind, sessionId };
 }
 
 export class McpStdioCoordinatorClient implements CoordinatorClient {
@@ -106,6 +129,49 @@ export class McpStdioCoordinatorClient implements CoordinatorClient {
 			return { ok: true };
 		} catch {
 			return { ok: false, reason: "coordinator_unreachable" };
+		}
+	}
+
+	async watchEvents(input: WatchEventsInput): Promise<WatchEventsResult> {
+		const timeoutMs = Math.min(input.timeoutMs ?? 25000, 30000);
+		const limit = Math.min(input.limit ?? 100, 100);
+		const args = {
+			after_seq: input.afterSeq,
+			...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+			...(input.eventTypes !== undefined ? { event_types: input.eventTypes } : {}),
+			timeout_ms: timeoutMs,
+			limit,
+		};
+		try {
+			const payload = await this.callTool("gjc_coordinator_watch_events", args);
+			if (payload.ok === false) {
+				return {
+					ok: false,
+					reason: "coordinator_unreachable",
+					events: [],
+					latestSeq: input.afterSeq,
+					timedOut: false,
+				};
+			}
+			const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+			const events = rawEvents.flatMap(event => {
+				const parsed = parseRoutingEvent(event);
+				return parsed ? [parsed] : [];
+			});
+			const latestSeq =
+				typeof payload.latest_seq === "number" && Number.isFinite(payload.latest_seq)
+					? payload.latest_seq
+					: input.afterSeq;
+			const timedOut = payload.timed_out === true;
+			return { ok: true, events, latestSeq, timedOut };
+		} catch {
+			return {
+				ok: false,
+				reason: "coordinator_unreachable",
+				events: [],
+				latestSeq: input.afterSeq,
+				timedOut: false,
+			};
 		}
 	}
 

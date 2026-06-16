@@ -8,6 +8,7 @@ export { loadConfigFromEnv, type ServiceConfig } from "./config";
 export { McpStdioCoordinatorClient, type McpStdioOptions } from "./coordinator-client";
 export { type GatewayDeps, type GatewayPolicy, TelegramRemoteGateway } from "./gateway";
 export { MESSAGES, UNAUTHORIZED_REFUSAL } from "./messages";
+export { type NotifierDeps, TelegramRemoteNotifier } from "./notifier";
 export { assertValidPreset, type PresetResolution, resolvePreset, sanitizeTask, TASK_SLOT } from "./presets";
 export {
 	activeTurnId,

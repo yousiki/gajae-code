@@ -132,6 +132,18 @@ export class TelegramBotApiTransport implements TelegramTransport {
 		this.running = false;
 	}
 
+	async send(message: { chatId: string; reply: ChatReply }): Promise<{ ok: boolean; retryAfterMs?: number }> {
+		const result = await this.postResult("sendMessage", {
+			chat_id: message.chatId,
+			...this.messageBody(message.reply),
+		});
+		if (result.ok) return { ok: true };
+		const retryAfter = result.body?.parameters?.retry_after;
+		if (typeof retryAfter === "number" && Number.isFinite(retryAfter))
+			return { ok: false, retryAfterMs: retryAfter * 1000 };
+		return { ok: false };
+	}
+
 	/** Register the Bot command menu once (non-fatal). */
 	private async initialize(): Promise<void> {
 		if (this.initialized) return;
@@ -234,16 +246,23 @@ export class TelegramBotApiTransport implements TelegramTransport {
 
 	/** POST a Bot API method; returns whether the API reported ok. Never throws. */
 	private async post(method: string, body: Record<string, unknown>): Promise<boolean> {
+		return (await this.postResult(method, body)).ok;
+	}
+
+	private async postResult(
+		method: string,
+		body: Record<string, unknown>,
+	): Promise<{ ok: boolean; body: { parameters?: { retry_after?: unknown } } | null }> {
 		try {
 			const response = await this.fetchImpl(`${this.endpoint}/${method}`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(body),
 			});
-			const data = (await response.json()) as { ok?: boolean };
-			return data.ok === true;
+			const data = (await response.json()) as { ok?: boolean; parameters?: { retry_after?: unknown } };
+			return { ok: data.ok === true, body: data };
 		} catch {
-			return false;
+			return { ok: false, body: null };
 		}
 	}
 }

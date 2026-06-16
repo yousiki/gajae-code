@@ -11,7 +11,14 @@
 import { randomBytes } from "node:crypto";
 import type { SessionFilter } from "./types";
 
-export type SessionCallbackAction = "observe" | "refresh_observe" | "stop_arm" | "stop_confirm" | "cancel";
+export type SessionCallbackAction =
+	| "observe"
+	| "refresh_observe"
+	| "follow"
+	| "mute"
+	| "stop_arm"
+	| "stop_confirm"
+	| "cancel";
 export type ListCallbackAction = "sessions_page" | "sessions_filter";
 export type PresetCallbackAction = "preset_start";
 export type CallbackAction = SessionCallbackAction | ListCallbackAction | PresetCallbackAction;

@@ -10,7 +10,10 @@
  */
 import { TelegramRemoteGateway } from "../src/gateway";
 import { UNAUTHORIZED_REFUSAL } from "../src/messages";
+import { TelegramRemoteNotifier } from "../src/notifier";
+import { SubscriptionStore } from "../src/subscriptions";
 import type {
+	ChatReply,
 	CoordinationStatus,
 	CoordinatorClient,
 	IncomingCallbackQuery,
@@ -19,6 +22,8 @@ import type {
 	ReportStatusResult,
 	StartSessionResult,
 	TelegramInlineKeyboardButton,
+	WatchEventsInput,
+	WatchEventsResult,
 } from "../src/types";
 
 const HOSTILE_STATUS: CoordinationStatus = {
@@ -51,6 +56,9 @@ class SmokeCoordinator implements CoordinatorClient {
 	constructor(private readonly status: CoordinationStatus) {}
 	async getCoordinationStatus(): Promise<CoordinationStatus> {
 		return this.status;
+	}
+	async watchEvents(input: WatchEventsInput): Promise<WatchEventsResult> {
+		return { ok: true, events: [], latestSeq: input.afterSeq, timedOut: true };
 	}
 	async startSession(input: { cwd: string; prompt?: string }): Promise<StartSessionResult> {
 		this.startCalls++;
@@ -195,9 +203,79 @@ async function richCallbackInvariants(): Promise<void> {
 	assert(coordinator.reportCalls === before, "unauthorized callback triggered no mutation");
 }
 
+async function pushNotifierInvariants(): Promise<void> {
+	const store = await SubscriptionStore.load({ filePath: `/tmp/gtr-smoke-${process.pid}.json`, now: () => 1_000_000 });
+	const status: CoordinationStatus = {
+		ok: true,
+		sessions: [{ session_id: "sess-1", branch: "safe", cwd: "/secret/abs/path", tail_preview: "SECRET_TAIL" }],
+		sessionStates: [{ session_id: "sess-1", state: "blocked", live: true, reason: "blocked" }],
+		turns: [{ session_id: "sess-1", status: "waiting_for_answer", prompt: "PROMPT_LEAK" }],
+	};
+	const coordinator = new SmokeCoordinator(status);
+	const gateway = new TelegramRemoteGateway(
+		{
+			allowedUserIds: new Set(["100"]),
+			allowedChatIds: new Set(),
+			presets: new Map(),
+			enableStop: true,
+			enableRichMessages: true,
+			enablePush: true,
+		},
+		{ coordinator, subscriptions: store },
+	);
+	const sessions = asChat(await gateway.handleUpdate(msg("100", "/sessions")));
+	const follow = buttons(sessions).find(b => b.text.startsWith("Follow"));
+	assert(!!follow, "follow button present when push enabled");
+	await gateway.handleUpdate(cb("100", "100", (follow as TelegramInlineKeyboardButton).callbackData));
+	assert((await store.followers("sess-1")).length === 1, "follow persisted");
+	const denied = await gateway.handleUpdate(cb("999", "999", (follow as TelegramInlineKeyboardButton).callbackData));
+	assert(denied.kind === "callback_answer", "unauthorized follow default-denied");
+
+	const sends: Array<{ chatId: string; reply: ChatReply }> = [];
+	const sleeps: number[] = [];
+	let first = true;
+	const notifier = new TelegramRemoteNotifier({
+		coordinator: {
+			getCoordinationStatus: () => coordinator.getCoordinationStatus(),
+			watchEvents: async input => ({
+				ok: true,
+				events:
+					input.afterSeq === 0 ? [{ seq: 1, kind: "session.state_changed", sessionId: "sess-1" } as never] : [],
+				latestSeq: 999,
+				timedOut: false,
+			}),
+			reportStatus: input => coordinator.reportStatus(input),
+			startSession: input => coordinator.startSession(input),
+		},
+		outbound: {
+			send: async message => {
+				sends.push(message);
+				if (first) {
+					first = false;
+					return { ok: false, retryAfterMs: 429 };
+				}
+				return { ok: true };
+			},
+		},
+		subscriptions: store,
+		renderCard: (raw, view, sub) =>
+			gateway.renderNotificationCard(raw, view, { chatId: sub.chatId, userId: sub.userId }),
+		sleep: async ms => {
+			sleeps.push(ms);
+		},
+	});
+	await (notifier as unknown as { pollDrain(timeoutMs: number): Promise<boolean> }).pollDrain(1);
+	assert(store.getCursor() === 1, "watch_events backlog advanced through returned seq");
+	assert(sleeps.includes(429), "429 retry_after slept before digest retry");
+	const rendered = JSON.stringify(sends);
+	for (const secret of FORBIDDEN) assert(!rendered.includes(secret), `push leaked ${secret}`);
+	assert(!rendered.includes(LONG_ID), "raw id absent from push smoke output");
+}
+
 async function main(): Promise<void> {
 	await plainInvariants();
 	await richCallbackInvariants();
+	await pushNotifierInvariants();
 	process.stdout.write("telegram-remote-safety-ok\n");
 }
 
