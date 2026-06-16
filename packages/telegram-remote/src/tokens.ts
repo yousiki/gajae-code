@@ -21,7 +21,8 @@ export type SessionCallbackAction =
 	| "cancel";
 export type ListCallbackAction = "sessions_page" | "sessions_filter";
 export type PresetCallbackAction = "preset_start";
-export type CallbackAction = SessionCallbackAction | ListCallbackAction | PresetCallbackAction;
+export type RpcCallbackAction = "ui_select" | "ui_confirm" | "gate_answer" | "steer_held" | "cancel_steer" | "abort";
+export type CallbackAction = SessionCallbackAction | ListCallbackAction | PresetCallbackAction | RpcCallbackAction;
 
 export interface BaseCallbackTokenRecord {
 	chatId: string;
@@ -31,6 +32,13 @@ export interface BaseCallbackTokenRecord {
 	/** One-shot guard for mutating confirmations. */
 	used: boolean;
 	messageId?: string | number;
+}
+
+export interface RevokeMatchingCriteria {
+	action: CallbackAction;
+	chatId?: string;
+	sessionId?: string;
+	heldTextId?: string;
 }
 
 export interface SessionCallbackPayload {
@@ -51,8 +59,53 @@ export interface PresetCallbackPayload {
 	presetId: string;
 }
 
+export interface RpcUiSelectPayload {
+	action: "ui_select";
+	requestId: string;
+	optionIndex: number;
+	value: string;
+}
+
+export interface RpcUiConfirmPayload {
+	action: "ui_confirm";
+	requestId: string;
+	confirmed: boolean;
+}
+
+export interface RpcGateAnswerPayload {
+	action: "gate_answer";
+	gateId: string;
+	optionIndex: number;
+	answer: unknown;
+	idempotencyKey: string;
+}
+
+export interface RpcSteerHeldPayload {
+	action: "steer_held";
+	heldTextId: string;
+}
+
+export interface RpcCancelSteerPayload {
+	action: "cancel_steer";
+	heldTextId: string;
+}
+
+export interface RpcAbortPayload {
+	action: "abort";
+}
+
 export type CallbackTokenRecord = BaseCallbackTokenRecord &
-	(SessionCallbackPayload | ListCallbackPayload | PresetCallbackPayload);
+	(
+		| SessionCallbackPayload
+		| ListCallbackPayload
+		| PresetCallbackPayload
+		| RpcUiSelectPayload
+		| RpcUiConfirmPayload
+		| RpcGateAnswerPayload
+		| RpcSteerHeldPayload
+		| RpcCancelSteerPayload
+		| RpcAbortPayload
+	);
 
 export const CALLBACK_PREFIX = "gtr:v1:";
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -83,7 +136,17 @@ export class CallbackTokenStore {
 	/** Issue a token for an action and return the opaque `gtr:v1:<token>` callback data. */
 	issue(
 		record: Omit<BaseCallbackTokenRecord, "expiresAt" | "used"> &
-			(SessionCallbackPayload | ListCallbackPayload | PresetCallbackPayload) & { ttlMs: number },
+			(
+				| SessionCallbackPayload
+				| ListCallbackPayload
+				| PresetCallbackPayload
+				| RpcUiSelectPayload
+				| RpcUiConfirmPayload
+				| RpcGateAnswerPayload
+				| RpcSteerHeldPayload
+				| RpcCancelSteerPayload
+				| RpcAbortPayload
+			) & { ttlMs: number },
 	): string {
 		this.evictExpired();
 		const token = randomBytes(16).toString("base64url");
@@ -120,17 +183,32 @@ export class CallbackTokenStore {
 		this.tokens.delete(token);
 	}
 
-	/** Invalidate every token of an action for a chat+session (e.g. cancel revokes its confirm sibling). */
-	revokeMatching(action: CallbackAction, chatId: string, sessionId: string): void {
+	/** Invalidate every token matching the supplied server-side binding criteria. */
+	revokeMatching(action: CallbackAction, chatId: string, sessionId: string): void;
+	revokeMatching(criteria: RevokeMatchingCriteria): void;
+	revokeMatching(
+		actionOrCriteria: CallbackAction | RevokeMatchingCriteria,
+		chatId?: string,
+		sessionId?: string,
+	): void {
+		const criteria: RevokeMatchingCriteria =
+			typeof actionOrCriteria === "string" ? { action: actionOrCriteria, chatId, sessionId } : actionOrCriteria;
 		for (const [token, record] of this.tokens) {
+			if (record.action !== criteria.action) continue;
+			if (criteria.chatId !== undefined && record.chatId !== criteria.chatId) continue;
 			if (
-				record.action === action &&
-				record.chatId === chatId &&
-				"sessionId" in record &&
-				record.sessionId === sessionId
+				criteria.sessionId !== undefined &&
+				(!("sessionId" in record) || record.sessionId !== criteria.sessionId)
 			) {
-				this.tokens.delete(token);
+				continue;
 			}
+			if (
+				criteria.heldTextId !== undefined &&
+				(!("heldTextId" in record) || record.heldTextId !== criteria.heldTextId)
+			) {
+				continue;
+			}
+			this.tokens.delete(token);
 		}
 	}
 

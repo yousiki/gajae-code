@@ -276,6 +276,13 @@ export class TelegramRemoteGateway {
 				return this.callbackSessionsList(record, ctx, update.messageId);
 			case "preset_start":
 				return this.callbackPresetStart(token, record, ctx);
+			case "ui_select":
+			case "ui_confirm":
+			case "gate_answer":
+			case "steer_held":
+			case "cancel_steer":
+			case "abort":
+				return this.answerOnly(MESSAGES.callbackInvalid);
 		}
 	}
 

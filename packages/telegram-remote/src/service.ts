@@ -42,8 +42,9 @@ export async function runService(config: ServiceConfig, options: RunServiceOptio
 				defaultSocketPath: config.rpc.socketPath,
 				allowAttachSocketArg: config.rpc.allowAttachSocketArg,
 			},
-			{ backend: rpcBackend, attachments },
+			{ backend: rpcBackend, attachments, outbound: typeof transport.send === "function" ? transport : undefined },
 		);
+		await gateway.restorePersistedAttachment();
 		const shutdown = (): void => {
 			transport.stop();
 			void rpcBackend.close();

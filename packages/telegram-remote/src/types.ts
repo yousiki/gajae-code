@@ -133,13 +133,18 @@ export interface RpcBackendState {
 }
 
 export interface RpcBackendPort {
-	connect(): Promise<void>;
+	connect(socketPath?: string): Promise<void>;
 	close(): Promise<void>;
 	getState(): Promise<RpcBackendState>;
 	prompt(message: string): Promise<void>;
 	steer(message: string): Promise<void>;
 	abort(): Promise<void>;
 	abortAndPrompt(message: string): Promise<void>;
+	respondExtensionUi?(response: unknown): void;
+	respondGate?(gateId: string, answer: unknown, idempotencyKey?: string): Promise<unknown>;
+	getPendingWorkflowGates?(): Promise<unknown[]>;
+	onExtensionUiRequest?(listener: (request: unknown) => void): () => void;
+	onWorkflowGate?(listener: (gate: unknown) => void): () => void;
 	onEvents?(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
 	onTransportError?(listener: (error: Error) => void): () => void;
 	onCommandIgnored?(listener: (error: Error) => void): () => void;

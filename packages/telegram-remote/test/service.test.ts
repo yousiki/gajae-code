@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServiceConfig } from "../src/config";
 import { MESSAGES, UNAUTHORIZED_REFUSAL } from "../src/messages";
+import { RpcAttachmentStore } from "../src/rpc-attachment-store";
 import { FakeRpcBackend } from "../src/rpc-backend";
 import { runService } from "../src/service";
 import type { CoordinationStatus, IncomingUpdate } from "../src/types";
@@ -141,4 +142,51 @@ test("RPC mode does not instantiate or browse the coordinator", async () => {
 	expect(transport.sent[1]?.text).toBe("Detached.");
 	expect(coordinator.calls).toHaveLength(0);
 	expect(rpcBackend.connectCalls).toBe(0);
+});
+
+test("RPC mode restores persisted attachment and replays pending gate on startup", async () => {
+	const rpcBackend = new FakeRpcBackend("/tmp/default.sock");
+	rpcBackend.pendingWorkflowGates = [
+		{
+			type: "workflow_gate",
+			gate_id: "gate-1",
+			stage: "ralplan",
+			kind: "approval",
+			schema: { type: "string" },
+			schema_hash: "hash",
+			options: [{ label: "Approve", value: "approve" }],
+			context: { title: "Approve?", prompt: "Approve restored gate?" },
+			created_at: "2026-06-16T00:00:00Z",
+			required: true,
+		},
+	];
+	const transport = new FakeTransport([]);
+	const stateDir = await mkdtemp(join(tmpdir(), "gtr-rpc-service-restore-"));
+	const store = await RpcAttachmentStore.open({ stateDir });
+	await store.set({
+		chatId: "100",
+		userId: "100",
+		socketPath: "/tmp/restored.sock",
+		stale: false,
+		controllerState: "attached_idle",
+		pendingGateIds: ["gate-1"],
+		deliveryIdentities: [],
+		updatedAt: 1,
+	});
+
+	await runService(
+		{
+			...serviceConfig({ enableRichMessages: true }),
+			backend: "rpc",
+			stateDir,
+			rpc: { socketPath: "/tmp/default.sock", stateDir, livenessMs: 60_000, allowAttachSocketArg: false },
+		},
+		{ rpcBackend, transport },
+	);
+
+	expect(rpcBackend.calls).toContainEqual({ method: "connect", args: "/tmp/restored.sock" });
+	expect(rpcBackend.countOf("getPendingWorkflowGates")).toBe(1);
+	expect(transport.outbound).toHaveLength(1);
+	expect(transport.outbound[0].chatId).toBe("100");
+	expect(transport.outbound[0].reply.text).toContain("Approve restored gate?");
 });

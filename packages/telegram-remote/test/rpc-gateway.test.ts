@@ -6,7 +6,6 @@ import { MESSAGES } from "../src/messages";
 import { RpcAttachmentStore } from "../src/rpc-attachment-store";
 import { FakeRpcBackend } from "../src/rpc-backend";
 import { type RpcGatewayPolicy, TelegramRpcGateway } from "../src/rpc-gateway";
-import type { IncomingCallbackQuery } from "../src/types";
 import { callback, message } from "./helpers";
 
 let backend: FakeRpcBackend;
@@ -34,17 +33,22 @@ beforeEach(() => {
 	clock = 0;
 });
 
-function cancelSteer(): IncomingCallbackQuery {
-	return callback({ data: "gtr:v1:cancel-steer" });
-}
-
-function steerHeld(): IncomingCallbackQuery {
-	return callback({ data: "gtr:v1:steer-held" });
+function buttonData(reply: Awaited<ReturnType<TelegramRpcGateway["handleUpdate"]>>, text: string): string {
+	const button = activeChoiceButtons(reply).find(item => item.text === text);
+	expect(button).toBeDefined();
+	return button!.callbackData;
 }
 
 function activeChoiceButtons(reply: Awaited<ReturnType<TelegramRpcGateway["handleUpdate"]>>) {
 	if (reply.kind !== "chat") return [];
 	return reply.replyMarkup?.inline_keyboard.flat() ?? [];
+}
+
+function expectOpaqueCallbackData(data: string): void {
+	expect(data).toMatch(/^gtr:v1:[A-Za-z0-9_-]+$/);
+	expect(data).not.toBe("gtr:v1:steer-held");
+	expect(data).not.toBe("gtr:v1:cancel-steer");
+	expect(data).not.toBe("gtr:v1:abort");
 }
 
 describe("TelegramRpcGateway", () => {
@@ -64,8 +68,8 @@ describe("TelegramRpcGateway", () => {
 		const buttons = activeChoiceButtons(reply);
 		expect(reply.kind).toBe("chat");
 		expect(reply.kind === "chat" ? reply.text : "").toBe("Choose how to apply this input.");
-		expect(buttons).toContainEqual({ text: "Steer", callbackData: "gtr:v1:steer-held" });
-		expect(buttons).toContainEqual({ text: "Cancel & steer", callbackData: "gtr:v1:cancel-steer" });
+		expect(buttons.map(button => button.text)).toEqual(["Steer", "Cancel & steer"]);
+		for (const button of buttons) expectOpaqueCallbackData(button.callbackData);
 		expect(backend.calls.map(call => [call.method, call.args])).toContainEqual(["prompt", "start work"]);
 		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual(["steer", "adjust course"]);
 		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual([
@@ -81,10 +85,10 @@ describe("TelegramRpcGateway", () => {
 		const steerText = "new direction";
 		const promptReply = await gateway.handleUpdate(message({ text: steerText }));
 		const callbacks = activeChoiceButtons(promptReply).map(button => button.callbackData);
-		expect(callbacks).toContain("gtr:v1:steer-held");
-		expect(callbacks).toContain("gtr:v1:cancel-steer");
+		expect(callbacks).toHaveLength(2);
+		for (const data of callbacks) expectOpaqueCallbackData(data);
 		expect(callbacks.join(" ")).not.toContain(steerText);
-		const update = steerHeld();
+		const update = callback({ data: buttonData(promptReply, "Steer") });
 		expect(update.data).not.toContain(steerText);
 		const reply = await gateway.handleUpdate(update);
 		expect(reply).toEqual({
@@ -97,6 +101,34 @@ describe("TelegramRpcGateway", () => {
 		expect(backend.calls.map(call => [call.method, call.args])).toContainEqual(["steer", steerText]);
 		expect(backend.countOf("steer")).toBe(1);
 		expect(backend.countOf("abortAndPrompt")).toBe(0);
+	});
+
+	test("replacing held text invalidates old steer and cancel buttons", async () => {
+		const gateway = await makeGateway();
+		await gateway.handleUpdate(message({ text: "/attach" }));
+		backend.state = { ...backend.state, session: { status: "active", turnId: "old" } };
+		const firstReply = await gateway.handleUpdate(message({ text: "old direction" }));
+		const oldSteer = buttonData(firstReply, "Steer");
+		const oldCancel = buttonData(firstReply, "Cancel & steer");
+		const secondReply = await gateway.handleUpdate(message({ text: "new direction" }));
+		const newSteer = buttonData(secondReply, "Steer");
+
+		expect(await gateway.handleUpdate(callback({ data: oldSteer }))).toEqual({
+			kind: "callback_answer",
+			callbackAnswer: { text: MESSAGES.callbackInvalid },
+			sendMessage: false,
+		});
+		expect(await gateway.handleUpdate(callback({ data: oldCancel }))).toEqual({
+			kind: "callback_answer",
+			callbackAnswer: { text: MESSAGES.callbackInvalid },
+			sendMessage: false,
+		});
+
+		const applied = await gateway.handleUpdate(callback({ data: newSteer }));
+		expect(applied.kind === "callback_answer" ? applied.callbackAnswer.text : "").toBe("Steer queued.");
+		expect(backend.calls.map(call => [call.method, call.args])).toContainEqual(["steer", "new direction"]);
+		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual(["steer", "old direction"]);
+		expect(backend.countOf("steer")).toBe(1);
 	});
 
 	test("/abort maps to backend abort", async () => {
@@ -115,11 +147,11 @@ describe("TelegramRpcGateway", () => {
 		const steerText = "new direction";
 		const promptReply = await gateway.handleUpdate(message({ text: steerText }));
 		const callbacks = activeChoiceButtons(promptReply).map(button => button.callbackData);
-		expect(callbacks).toContain("gtr:v1:steer-held");
-		expect(callbacks).toContain("gtr:v1:cancel-steer");
+		expect(callbacks).toHaveLength(2);
+		for (const data of callbacks) expectOpaqueCallbackData(data);
 		expect(callbacks.join(" ")).not.toContain(steerText);
-		const update = cancelSteer();
-		expect(update.data).toBe("gtr:v1:cancel-steer");
+		const update = callback({ data: buttonData(promptReply, "Cancel & steer") });
+		expect(update.data).not.toBe("gtr:v1:cancel-steer");
 		expect(update.data).not.toContain(steerText);
 		const reply = await gateway.handleUpdate(update);
 		expect(reply).toEqual({
@@ -139,7 +171,7 @@ describe("TelegramRpcGateway", () => {
 	test("cancel-and-steer callback without pending steer text is invalid", async () => {
 		const gateway = await makeGateway();
 		await gateway.handleUpdate(message({ text: "/attach" }));
-		const reply = await gateway.handleUpdate(cancelSteer());
+		const reply = await gateway.handleUpdate(callback({ data: "gtr:v1:cancel-steer" }));
 		expect(reply).toEqual({
 			kind: "callback_answer",
 			callbackAnswer: { text: MESSAGES.callbackInvalid },
@@ -152,8 +184,10 @@ describe("TelegramRpcGateway", () => {
 		const gateway = await makeGateway();
 		await gateway.handleUpdate(message({ text: "/attach" }));
 		backend.state = { ...backend.state, session: { status: "active", turnId: "old" } };
-		await gateway.handleUpdate(message({ text: "do not leak" }));
-		const reply = await gateway.handleUpdate(callback({ userId: "999", chatId: "999", data: "gtr:v1:steer-held" }));
+		const promptReply = await gateway.handleUpdate(message({ text: "do not leak" }));
+		const reply = await gateway.handleUpdate(
+			callback({ userId: "999", chatId: "999", data: buttonData(promptReply, "Steer") }),
+		);
 		expect(reply).toEqual({
 			kind: "callback_answer",
 			callbackAnswer: { text: MESSAGES.unauthorized },

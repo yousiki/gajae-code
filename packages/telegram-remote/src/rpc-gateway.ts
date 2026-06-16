@@ -2,6 +2,8 @@ import { parseCommand } from "./commands";
 import { MESSAGES } from "./messages";
 import type { RpcAttachmentStore } from "./rpc-attachment-store";
 import { type RpcControlSignal, RpcControlStateMachine } from "./rpc-control-state";
+import { extensionUiResponseFromToken, RpcUiBridge } from "./rpc-ui-bridge";
+import { CallbackTokenStore } from "./tokens";
 import type {
 	AttachmentRecord,
 	ChatReply,
@@ -9,6 +11,7 @@ import type {
 	IncomingUpdate,
 	OutgoingReply,
 	RpcBackendPort,
+	TelegramTransport,
 } from "./types";
 
 export interface RpcGatewayPolicy {
@@ -22,6 +25,9 @@ export interface RpcGatewayDeps {
 	backend: RpcBackendPort;
 	attachments: RpcAttachmentStore;
 	now?: () => number;
+	tokens?: CallbackTokenStore;
+	rpcUiTtlMs?: number;
+	outbound?: Pick<TelegramTransport, "send">;
 }
 
 export class TelegramRpcGateway {
@@ -32,12 +38,20 @@ export class TelegramRpcGateway {
 	readonly #control: RpcControlStateMachine;
 	#lastControlSignal: RpcControlSignal | null = null;
 	#pendingSteerText: string | null = null;
+	#pendingSteerTextId: string | null = null;
+	readonly #tokens: CallbackTokenStore;
+	readonly #rpcUiTtlMs: number;
+	#uiBridge: RpcUiBridge | null = null;
+	readonly #outbound?: Pick<TelegramTransport, "send">;
 
 	constructor(policy: RpcGatewayPolicy, deps: RpcGatewayDeps) {
 		this.#policy = policy;
 		this.#backend = deps.backend;
 		this.#attachments = deps.attachments;
 		this.#now = deps.now ?? Date.now;
+		this.#tokens = deps.tokens ?? new CallbackTokenStore({ now: this.#now });
+		this.#rpcUiTtlMs = deps.rpcUiTtlMs ?? 5 * 60 * 1000;
+		this.#outbound = deps.outbound;
 		this.#control = new RpcControlStateMachine({
 			backend: this.#backend,
 			onSignal: signal => {
@@ -52,6 +66,17 @@ export class TelegramRpcGateway {
 		});
 		this.#backend.onTransportError?.(() => this.#control.transportError());
 		this.#backend.onCommandIgnored?.(() => this.#control.controllerStolen());
+	}
+
+	async restorePersistedAttachment(): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment || attachment.stale) return;
+		await this.#backend.connect(attachment.socketPath);
+		this.#uiBridge?.stop();
+		this.#uiBridge = this.createUiBridge(attachment);
+		this.#uiBridge.start();
+		await this.#uiBridge.replayPendingWorkflowGates();
+		await this.updateAttachmentState();
 	}
 
 	async handleUpdate(update: IncomingUpdate): Promise<OutgoingReply> {
@@ -103,7 +128,11 @@ export class TelegramRpcGateway {
 			updatedAt: this.#now(),
 		};
 		await this.#attachments.set(attachment);
+		this.#uiBridge?.stop();
+		this.#uiBridge = this.createUiBridge(attachment);
+		this.#uiBridge.start();
 		await this.#control.attach();
+		await this.#uiBridge.replayPendingWorkflowGates();
 		await this.#attachments.set({ ...attachment, controllerState: this.#control.state, updatedAt: this.#now() });
 		return this.chat("Attached to RPC session.");
 	}
@@ -119,11 +148,22 @@ export class TelegramRpcGateway {
 		const attachment = this.#attachments.get();
 		if (!attachment) return this.chat("Attach first with /attach.");
 		if (this.#control.state !== "reconnecting") await this.#control.refreshFromBackend().catch(() => undefined);
+		const textResponse = this.#uiBridge?.consumeTextResponse({
+			chatId: attachment.chatId,
+			userId: attachment.userId,
+			text,
+		});
+		if (textResponse === "sent") {
+			return this.chat("Sent.");
+		}
+		if (textResponse === "failed") {
+			return this.chat("Couldn't deliver your response — not connected; try again.");
+		}
 		const routesToSteer = this.#control.state === "attached_turn_active" || this.#control.state === "waiting_for_ui";
 		if (routesToSteer) {
-			this.#pendingSteerText = text;
+			this.setPendingSteerText(text, attachment);
 		} else {
-			this.#pendingSteerText = null;
+			this.clearPendingSteerText(attachment);
 			await this.#control.submitText(text);
 		}
 		await this.updateAttachmentState();
@@ -133,8 +173,8 @@ export class TelegramRpcGateway {
 				? this.chat("Choose how to apply this input.", {
 						inline_keyboard: [
 							[
-								{ text: "Steer", callbackData: "gtr:v1:steer-held" },
-								{ text: "Cancel & steer", callbackData: "gtr:v1:cancel-steer" },
+								{ text: "Steer", callbackData: this.issueRpcToken("steer_held", attachment) },
+								{ text: "Cancel & steer", callbackData: this.issueRpcToken("cancel_steer", attachment) },
 							],
 						],
 					})
@@ -144,7 +184,7 @@ export class TelegramRpcGateway {
 	private async abort(): Promise<ChatReply> {
 		const attachment = this.#attachments.get();
 		if (!attachment) return this.chat("Attach first with /attach.");
-		this.#pendingSteerText = null;
+		this.clearPendingSteerText(attachment);
 		await this.#control.abort();
 		await this.updateAttachmentState();
 		return this.chat(this.reconnectReplyIfNeeded() ?? "Abort requested.");
@@ -154,19 +194,26 @@ export class TelegramRpcGateway {
 		if (!update.chatId || !this.isAuthorized(update.userId, update.chatId)) {
 			return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.unauthorized }, sendMessage: false };
 		}
-		if (update.data === "gtr:v1:abort") {
-			this.#pendingSteerText = null;
+		const tokenResolution = this.#tokens.resolve(update.data, { chatId: update.chatId, userId: update.userId });
+		if (!tokenResolution.ok) {
+			return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackInvalid }, sendMessage: false };
+		}
+		const record = tokenResolution.record;
+		if (record.action === "abort") {
+			this.#tokens.markUsed(tokenResolution.token);
+			this.clearPendingSteerText(this.#attachments.get());
 			await this.#control.abort();
 			await this.updateAttachmentState();
 			return { kind: "callback_answer", callbackAnswer: { text: "Abort requested." }, sendMessage: false };
 		}
-		if (update.data === "gtr:v1:steer-held" || update.data === "gtr:v1:cancel-steer") {
+		if (record.action === "steer_held" || record.action === "cancel_steer") {
 			const text = this.#pendingSteerText;
-			if (!text) {
+			if (!text || record.heldTextId !== this.#pendingSteerTextId) {
 				return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackInvalid }, sendMessage: false };
 			}
-			this.#pendingSteerText = null;
-			if (update.data === "gtr:v1:steer-held") {
+			this.#tokens.markUsed(tokenResolution.token);
+			this.clearPendingSteerText(this.#attachments.get());
+			if (record.action === "steer_held") {
 				await this.#control.submitText(text);
 				await this.updateAttachmentState();
 				return { kind: "callback_answer", callbackAnswer: { text: "Steer queued." }, sendMessage: false };
@@ -175,7 +222,82 @@ export class TelegramRpcGateway {
 			await this.updateAttachmentState();
 			return { kind: "callback_answer", callbackAnswer: { text: "Cancel & steer queued." }, sendMessage: false };
 		}
+		if (record.action === "ui_select" || record.action === "ui_confirm") {
+			const sent = await this.respondExtensionUi(extensionUiResponseFromToken(record));
+			if (!sent) return this.callbackRejected();
+			this.#tokens.markUsed(tokenResolution.token);
+			return { kind: "callback_answer", callbackAnswer: { text: "Sent." }, sendMessage: false };
+		}
+		if (record.action === "gate_answer") {
+			const accepted = await this.respondGate(record.gateId, record.answer, record.idempotencyKey);
+			if (!accepted) return this.callbackRejected();
+			this.#tokens.markUsed(tokenResolution.token);
+			return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackDone }, sendMessage: false };
+		}
 		return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackInvalid }, sendMessage: false };
+	}
+
+	private issueRpcToken(action: "steer_held" | "cancel_steer" | "abort", attachment: AttachmentRecord): string {
+		const base = { chatId: attachment.chatId, userId: attachment.userId, ttlMs: this.#rpcUiTtlMs };
+		if (action === "abort") return this.#tokens.issue({ ...base, action });
+		return this.#tokens.issue({ ...base, action, heldTextId: this.#pendingSteerTextId ?? "" });
+	}
+
+	private setPendingSteerText(text: string, attachment: AttachmentRecord): void {
+		const oldHeldTextId = this.#pendingSteerTextId;
+		this.#pendingSteerText = text;
+		this.#pendingSteerTextId = `held:${this.#now()}:${Math.random().toString(36).slice(2)}`;
+		if (oldHeldTextId) {
+			this.#tokens.revokeMatching({ action: "steer_held", chatId: attachment.chatId, heldTextId: oldHeldTextId });
+			this.#tokens.revokeMatching({ action: "cancel_steer", chatId: attachment.chatId, heldTextId: oldHeldTextId });
+		}
+	}
+
+	private clearPendingSteerText(attachment: AttachmentRecord | null): void {
+		const heldTextId = this.#pendingSteerTextId;
+		this.#pendingSteerText = null;
+		this.#pendingSteerTextId = null;
+		if (attachment && heldTextId) {
+			this.#tokens.revokeMatching({ action: "steer_held", chatId: attachment.chatId, heldTextId });
+			this.#tokens.revokeMatching({ action: "cancel_steer", chatId: attachment.chatId, heldTextId });
+		}
+	}
+
+	private createUiBridge(attachment: AttachmentRecord): RpcUiBridge {
+		return new RpcUiBridge({
+			backend: this.#backend,
+			tokens: this.#tokens,
+			binding: { chatId: attachment.chatId, userId: attachment.userId },
+			now: this.#now,
+			ttlMs: this.#rpcUiTtlMs,
+			onMessage: async reply => {
+				await this.#outbound?.send?.({ chatId: attachment.chatId, reply });
+			},
+		});
+	}
+
+	private async respondExtensionUi(response: unknown): Promise<boolean> {
+		try {
+			// RpcClient.respondExtensionUi only writes an extension_ui_response frame;
+			// the protocol has no ack for select/confirm/input, so success here means sent, not accepted.
+			this.#backend.respondExtensionUi?.(response);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private async respondGate(gateId: string, answer: unknown, idempotencyKey: string): Promise<boolean> {
+		try {
+			const result = await this.#backend.respondGate?.(gateId, answer, idempotencyKey);
+			return responseAccepted(result);
+		} catch {
+			return false;
+		}
+	}
+
+	private callbackRejected(): OutgoingReply {
+		return { kind: "callback_answer", callbackAnswer: { text: "Request was rejected." }, sendMessage: false };
 	}
 
 	private async updateAttachmentState(): Promise<void> {
@@ -210,4 +332,16 @@ export class TelegramRpcGateway {
 			? "Reconnecting to RPC session; input is queued."
 			: null;
 	}
+}
+
+function responseAccepted(result: unknown): boolean {
+	if (result === undefined) return true;
+	if (typeof result !== "object" || result === null) return true;
+	if ("accepted" in result && (result as { accepted?: unknown }).accepted === false) return false;
+	if ("ok" in result && (result as { ok?: unknown }).ok === false) return false;
+	if ("status" in result) {
+		const status = (result as { status?: unknown }).status;
+		if (status === "rejected" || status === "conflict" || status === "error") return false;
+	}
+	return true;
 }
