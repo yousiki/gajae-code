@@ -37,6 +37,14 @@ export function parseCommand(text: string): ParsedCommand {
 			return { kind: "start" };
 		case "presets":
 			return { kind: "presets" };
+		case "attach":
+			return { kind: "attach", socketPath: args[0] ?? null };
+		case "detach":
+			return { kind: "detach" };
+		case "status":
+			return { kind: "status" };
+		case "abort":
+			return { kind: "abort" };
 		case "sessions": {
 			const query = args.length > 0 ? args.join(" ").trim() : null;
 			return { kind: "sessions", query: query || null };

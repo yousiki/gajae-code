@@ -15,6 +15,11 @@ describe("parseCommand", () => {
 		});
 		expect(parseCommand("/stop sess-1")).toEqual({ kind: "stop", sessionId: "sess-1", confirm: false });
 		expect(parseCommand("/stop sess-1 confirm")).toEqual({ kind: "stop", sessionId: "sess-1", confirm: true });
+		expect(parseCommand("/attach")).toEqual({ kind: "attach", socketPath: null });
+		expect(parseCommand("/attach /tmp/gjc.sock")).toEqual({ kind: "attach", socketPath: "/tmp/gjc.sock" });
+		expect(parseCommand("/detach")).toEqual({ kind: "detach" });
+		expect(parseCommand("/status")).toEqual({ kind: "status" });
+		expect(parseCommand("/abort")).toEqual({ kind: "abort" });
 	});
 
 	test("strips @botname mention and is case-insensitive", () => {

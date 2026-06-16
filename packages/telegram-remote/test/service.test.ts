@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServiceConfig } from "../src/config";
 import { MESSAGES, UNAUTHORIZED_REFUSAL } from "../src/messages";
+import { FakeRpcBackend } from "../src/rpc-backend";
 import { runService } from "../src/service";
 import type { CoordinationStatus, IncomingUpdate } from "../src/types";
 import { FakeCoordinatorClient, FakeTransport, message, preset, presetMap } from "./helpers";
@@ -26,6 +27,7 @@ function serviceConfig(overrides: Partial<ServiceConfig["policy"]> = {}): Servic
 			enableStop: true,
 			...overrides,
 		},
+		backend: "coordinator",
 		coordinator: { command: "gjc", args: ["mcp-serve", "coordinator"], env: {} },
 	};
 }
@@ -114,4 +116,29 @@ test("push enabled with stateDir starts notifier", async () => {
 		{ coordinator, transport },
 	);
 	expect(coordinator.countOf("watchEvents")).toBeGreaterThan(0);
+});
+
+test("RPC mode does not instantiate or browse the coordinator", async () => {
+	class ThrowingCoordinator extends FakeCoordinatorClient {
+		override async getCoordinationStatus(): Promise<CoordinationStatus> {
+			throw new Error("coordinator_should_not_be_called");
+		}
+	}
+	const coordinator = new ThrowingCoordinator();
+	const rpcBackend = new FakeRpcBackend("/tmp/gjc.sock");
+	const transport = new FakeTransport([message({ text: "/sessions" }), message({ text: "/status" })]);
+	const stateDir = await mkdtemp(join(tmpdir(), "gtr-rpc-service-"));
+	await runService(
+		{
+			...serviceConfig({ enableRichMessages: true }),
+			backend: "rpc",
+			stateDir,
+			rpc: { socketPath: "/tmp/gjc.sock", stateDir, livenessMs: 60_000, allowAttachSocketArg: false },
+		},
+		{ coordinator, rpcBackend, transport },
+	);
+	expect(transport.sent[0]?.text).toBe(MESSAGES.unknownCommand);
+	expect(transport.sent[1]?.text).toBe("Detached.");
+	expect(coordinator.calls).toHaveLength(0);
+	expect(rpcBackend.connectCalls).toBe(0);
 });

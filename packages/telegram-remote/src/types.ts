@@ -65,7 +65,77 @@ export type ParsedCommand =
 	| { kind: "presets" }
 	| { kind: "start_session"; presetId: string | null; task: string | null }
 	| { kind: "stop"; sessionId: string | null; confirm: boolean }
+	| { kind: "attach"; socketPath: string | null }
+	| { kind: "detach" }
+	| { kind: "status" }
+	| { kind: "abort" }
 	| { kind: "unknown" };
+
+// --- RPC backend skeleton contract ---
+
+export type TelegramRemoteBackend = "coordinator" | "rpc";
+
+export interface RpcBackendConfig {
+	socketPath: string;
+	stateDir: string;
+	livenessMs: number;
+	allowAttachSocketArg: boolean;
+}
+
+export type RpcControlState =
+	| "detached"
+	| "connecting"
+	| "attached_idle"
+	| "attached_turn_active"
+	| "waiting_for_ui"
+	| "reconnecting"
+	| "stale";
+
+export interface RpcDeliveryIdentity {
+	turnId?: string;
+	messageIndex?: number;
+	timestamp?: string;
+	role: "assistant";
+	contentHash: string;
+	fallback?: boolean;
+}
+
+export interface RpcChunkProgress {
+	deliveryId: string;
+	nextChunkIndex: number;
+	chunkCount: number;
+	failedAt?: number;
+}
+
+export interface RpcLivenessState {
+	lastSeenAt: number;
+	timeoutMs: number;
+}
+
+export interface AttachmentRecord {
+	chatId: string;
+	userId: string | null;
+	socketPath: string;
+	stale: boolean;
+	controllerState?: RpcControlState;
+	liveness?: RpcLivenessState;
+	pendingGateIds: string[];
+	deliveryIdentities: RpcDeliveryIdentity[];
+	chunkProgress?: RpcChunkProgress;
+	updatedAt: number;
+}
+
+export interface RpcBackendState {
+	connected: boolean;
+	socketPath: string;
+	session?: unknown;
+}
+
+export interface RpcBackendPort {
+	connect(): Promise<void>;
+	close(): Promise<void>;
+	getState(): Promise<RpcBackendState>;
+}
 
 // --- Rich messaging contract (presentation layer only) ---
 

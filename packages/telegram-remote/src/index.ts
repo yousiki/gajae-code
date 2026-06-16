@@ -31,6 +31,9 @@ export {
 	renderSessionViewHtml,
 	shortSessionId,
 } from "./projection";
+export { RPC_ATTACHMENT_FILE_NAME, RpcAttachmentStore } from "./rpc-attachment-store";
+export { FakeRpcBackend, RpcBackend } from "./rpc-backend";
+export { type RpcGatewayDeps, type RpcGatewayPolicy, TelegramRpcGateway } from "./rpc-gateway";
 export { type RunServiceOptions, runService } from "./service";
 export {
 	resolveStateDir,
@@ -49,6 +52,7 @@ export {
 	parseCallbackData,
 } from "./tokens";
 export type {
+	AttachmentRecord,
 	CallbackAnswer,
 	CallbackAnswerOnlyReply,
 	ChatReply,
@@ -63,6 +67,9 @@ export type {
 	ParsedCommand,
 	RawRecord,
 	ReportStatusResult,
+	RpcBackendConfig,
+	RpcBackendPort,
+	RpcBackendState,
 	SessionStatus,
 	SessionSummary,
 	SessionView,

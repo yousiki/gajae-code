@@ -17,6 +17,7 @@ const DEFAULT_FOLLOW_TTL_MS = 86_400_000;
 const DEFAULT_SUBSCRIPTIONS_MAX = 1000;
 const DEFAULT_LONG_POLL_MS = 25_000;
 const DEFAULT_DIGEST_THRESHOLD = 5;
+const DEFAULT_RPC_LIVENESS_MS = 60_000;
 
 /** Fully resolved configuration for {@link runService}. */
 export interface ServiceConfig {
@@ -28,6 +29,13 @@ export interface ServiceConfig {
 	/** Register the Bot command menu at startup (transport). Default true. */
 	registerBotCommands: boolean;
 	stateDir?: string;
+	backend: "coordinator" | "rpc";
+	rpc?: {
+		socketPath: string;
+		stateDir: string;
+		livenessMs: number;
+		allowAttachSocketArg: boolean;
+	};
 	followTtlMs: number;
 	/** Enable proactive Follow push plumbing. Default false. */
 	enablePush: boolean;
@@ -165,6 +173,12 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseBackend(value: string | undefined): "coordinator" | "rpc" {
+	const backend = value?.trim().toLowerCase() || "coordinator";
+	if (backend !== "coordinator" && backend !== "rpc") throw new Error("telegram_remote_invalid_backend");
+	return backend;
+}
+
 function parseClampedPositiveInt(value: string | undefined, fallback: number, max: number): number {
 	return Math.min(parsePositiveInt(value, fallback), max);
 }
@@ -186,6 +200,8 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 	const enableStop = isTruthy(env.GJC_TELEGRAM_REMOTE_ENABLE_STOP);
 
 	const pollTimeoutSec = parsePositiveInt(env.GJC_TELEGRAM_REMOTE_POLL_TIMEOUT_SEC, 30);
+	const backend = parseBackend(env.GJC_TELEGRAM_REMOTE_BACKEND);
+	const rpcSocket = env.GJC_TELEGRAM_REMOTE_RPC_SOCKET?.trim();
 	const stateDirValue = env.GJC_TELEGRAM_REMOTE_STATE_DIR?.trim();
 	let stateDir: string | undefined;
 	if (stateDirValue) {
@@ -195,6 +211,10 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 			throw new Error("telegram_remote_invalid_state_dir");
 		}
 	}
+	if (backend === "rpc") {
+		if (!rpcSocket) throw new Error("telegram_remote_missing_env:GJC_TELEGRAM_REMOTE_RPC_SOCKET");
+		if (!stateDir) throw new Error("telegram_remote_missing_env:GJC_TELEGRAM_REMOTE_STATE_DIR");
+	}
 
 	return {
 		botToken,
@@ -203,6 +223,16 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 		enableEditMessageText: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ENABLE_EDIT_MESSAGE_TEXT, false),
 		registerBotCommands: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_REGISTER_COMMANDS, true),
 		stateDir,
+		backend,
+		rpc:
+			backend === "rpc"
+				? {
+						socketPath: rpcSocket!,
+						stateDir: stateDir!,
+						livenessMs: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_LIVENESS_MS, DEFAULT_RPC_LIVENESS_MS),
+						allowAttachSocketArg: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ALLOW_ATTACH_SOCKET_ARG, false),
+					}
+				: undefined,
 		followTtlMs: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_FOLLOW_TTL_MS, DEFAULT_FOLLOW_TTL_MS),
 		enablePush: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ENABLE_PUSH, false),
 		subscriptionsMax: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_SUBSCRIPTIONS_MAX, DEFAULT_SUBSCRIPTIONS_MAX),

@@ -30,6 +30,45 @@ describe("loadConfigFromEnv", () => {
 		expect(config.policy.presets.get("demo")?.name).toBe("Demo preset");
 		expect(config.coordinator.command).toBe("gjc");
 		expect(config.coordinator.args).toEqual(["mcp-serve", "coordinator"]);
+		expect(config.backend).toBe("coordinator");
+		expect(config.rpc).toBeUndefined();
+	});
+
+	test("parses RPC backend knobs", () => {
+		const config = loadConfigFromEnv(
+			baseEnv({
+				GJC_TELEGRAM_REMOTE_BACKEND: "rpc",
+				GJC_TELEGRAM_REMOTE_RPC_SOCKET: "/tmp/gjc-rpc.sock",
+				GJC_TELEGRAM_REMOTE_STATE_DIR: "/tmp/telegram-remote-rpc",
+				GJC_TELEGRAM_REMOTE_LIVENESS_MS: "120000",
+				GJC_TELEGRAM_REMOTE_ALLOW_ATTACH_SOCKET_ARG: "true",
+			}),
+		);
+		expect(config.backend).toBe("rpc");
+		expect(config.rpc).toEqual({
+			socketPath: "/tmp/gjc-rpc.sock",
+			stateDir: "/tmp/telegram-remote-rpc",
+			livenessMs: 120_000,
+			allowAttachSocketArg: true,
+		});
+	});
+
+	test("RPC backend requires socket and state dir with safe defaults", () => {
+		expect(() => loadConfigFromEnv(baseEnv({ GJC_TELEGRAM_REMOTE_BACKEND: "rpc" }))).toThrow(/RPC_SOCKET/);
+		expect(() =>
+			loadConfigFromEnv(
+				baseEnv({ GJC_TELEGRAM_REMOTE_BACKEND: "rpc", GJC_TELEGRAM_REMOTE_RPC_SOCKET: "/tmp/gjc.sock" }),
+			),
+		).toThrow(/STATE_DIR/);
+		const config = loadConfigFromEnv(
+			baseEnv({
+				GJC_TELEGRAM_REMOTE_BACKEND: "rpc",
+				GJC_TELEGRAM_REMOTE_RPC_SOCKET: "/tmp/gjc.sock",
+				GJC_TELEGRAM_REMOTE_STATE_DIR: "/tmp/gtr",
+			}),
+		);
+		expect(config.rpc?.livenessMs).toBe(60_000);
+		expect(config.rpc?.allowAttachSocketArg).toBe(false);
 	});
 
 	test("requires a bot token", () => {
