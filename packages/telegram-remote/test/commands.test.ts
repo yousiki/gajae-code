@@ -4,7 +4,8 @@ import { parseCommand } from "../src/commands";
 describe("parseCommand", () => {
 	test("parses the five commands plus help", () => {
 		expect(parseCommand("/help")).toEqual({ kind: "help" });
-		expect(parseCommand("/sessions")).toEqual({ kind: "sessions" });
+		expect(parseCommand("/sessions")).toEqual({ kind: "sessions", query: null });
+		expect(parseCommand("/sessions feat x")).toEqual({ kind: "sessions", query: "feat x" });
 		expect(parseCommand("/observe sess-1")).toEqual({ kind: "observe", sessionId: "sess-1" });
 		expect(parseCommand("/start-session demo build the thing")).toEqual({
 			kind: "start_session",
@@ -16,7 +17,7 @@ describe("parseCommand", () => {
 	});
 
 	test("strips @botname mention and is case-insensitive", () => {
-		expect(parseCommand("/Sessions@MyGjcBot")).toEqual({ kind: "sessions" });
+		expect(parseCommand("/Sessions@MyGjcBot")).toEqual({ kind: "sessions", query: null });
 		expect(parseCommand("/STOP sess-1 CONFIRM")).toEqual({ kind: "stop", sessionId: "sess-1", confirm: true });
 	});
 

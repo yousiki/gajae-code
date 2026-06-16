@@ -67,7 +67,10 @@ describe("runService end-to-end (fake transport + fake coordinator)", () => {
 		expect(typeof reply === "object" && reply.kind === "chat").toBe(true);
 		if (typeof reply === "object" && reply.kind === "chat") {
 			expect(reply.parseMode).toBe("HTML");
-			expect(reply.replyMarkup?.inline_keyboard.length).toBe(1);
+			// Browsing UX: at least one session row plus the Live/Blocked/Done/All filter row.
+			const keyboard = reply.replyMarkup?.inline_keyboard ?? [];
+			expect(keyboard.length).toBeGreaterThanOrEqual(2);
+			expect(keyboard.flat().some(b => b.text === "live" || b.text === "[all]")).toBe(true);
 			expect(reply.text).toContain("<code>");
 		}
 	});

@@ -33,6 +33,7 @@ export interface GatewayPreset {
 
 /** Bounded session status enum that may leave the PC into chat. */
 export type SessionStatus = "working" | "waiting_for_input" | "blocked" | "done" | "failed" | "cancelled" | "dead";
+export type SessionFilter = "live" | "blocked" | "done" | "all";
 
 /** Bounded turn-lifecycle enum that may leave the PC into chat. */
 export type TurnActivity = "none" | "queued" | "active" | "waiting_for_answer" | "terminal";
@@ -57,7 +58,7 @@ export interface SessionView extends SessionSummary {
 export type ParsedCommand =
 	| { kind: "help" }
 	| { kind: "start" }
-	| { kind: "sessions" }
+	| { kind: "sessions"; query: string | null }
 	| { kind: "observe"; sessionId: string | null }
 	| { kind: "start_session"; presetId: string | null; task: string | null }
 	| { kind: "stop"; sessionId: string | null; confirm: boolean }

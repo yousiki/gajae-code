@@ -17,6 +17,8 @@ import {
 	activeTurnId,
 	escapeHtml,
 	findSessionView,
+	isTerminalStatus,
+	isWithinRetention,
 	projectSessionRows,
 	projectSessionSummaries,
 	renderSessionsList,
@@ -24,7 +26,12 @@ import {
 	renderSessionView,
 	renderSessionViewHtml,
 } from "./projection";
-import { type CallbackTokenRecord, CallbackTokenStore } from "./tokens";
+import {
+	type CallbackTokenRecord,
+	CallbackTokenStore,
+	type ListCallbackAction,
+	type SessionCallbackAction,
+} from "./tokens";
 import type {
 	CallbackAnswerOnlyReply,
 	ChatReply,
@@ -36,12 +43,15 @@ import type {
 	IncomingTextMessage,
 	IncomingUpdate,
 	OutgoingReply,
+	SessionFilter,
+	SessionStatus,
 	SessionView,
 	TelegramInlineKeyboardButton,
 	TelegramInlineKeyboardMarkup,
 } from "./types";
 
 const DEFAULT_CONFIRM_TTL_MS = 120_000;
+const PAGE_SIZE = 8;
 const DEFAULT_RICH_TTL_MS = 600_000;
 const BUTTON_NAME_MAX = 40;
 const STOP_SUMMARY = "Operator requested graceful stop via Telegram remote.";
@@ -120,7 +130,7 @@ export class TelegramRemoteGateway {
 			case "start":
 				return this.chat(MESSAGES.start);
 			case "sessions":
-				return this.handleSessions(ctx);
+				return this.handleSessions(ctx, command.query);
 			case "observe":
 				return this.handleObserve(command.sessionId, ctx);
 			case "start_session":
@@ -132,19 +142,19 @@ export class TelegramRemoteGateway {
 		}
 	}
 
-	private async handleSessions(ctx: CallbackContext): Promise<ChatReply> {
+	private async handleSessions(ctx: CallbackContext, query: string | null): Promise<ChatReply> {
 		const status = await this.coordinator.getCoordinationStatus();
 		if (!status.ok) return this.chat(MESSAGES.backendOffline);
-		if (!this.rich) return this.chat(renderSessionsList(projectSessionSummaries(status)));
-		const rows = projectSessionRows(status);
-		const reply: ChatReply = {
-			kind: "chat",
-			text: renderSessionsListHtml(rows.map(row => row.summary)),
-			parseMode: "HTML",
-		};
-		const keyboard = this.sessionsKeyboard(rows, ctx);
-		if (keyboard) reply.replyMarkup = keyboard;
-		return reply;
+		if (!this.rich) {
+			// Plain v0 mode: simple list, but still honor the optional substring query.
+			const queryLower = query?.trim().toLowerCase() || null;
+			const summaries = projectSessionSummaries(status).filter(summary => {
+				if (!queryLower) return true;
+				return `${summary.name} ${summary.sessionId} ${summary.branch ?? ""}`.toLowerCase().includes(queryLower);
+			});
+			return this.chat(renderSessionsList(summaries));
+		}
+		return this.renderSessionsPage(status, { filter: "all", query, page: 0 }, ctx);
 	}
 
 	private async handleObserve(sessionId: string | null, ctx: CallbackContext): Promise<ChatReply> {
@@ -225,11 +235,14 @@ export class TelegramRemoteGateway {
 				// Revoke the paired confirmation so Cancel-then-Confirm cannot still mutate.
 				this.tokens.revokeMatching("stop_confirm", record.chatId, record.sessionId);
 				return this.answerOnly(MESSAGES.callbackCancelled);
+			case "sessions_page":
+			case "sessions_filter":
+				return this.callbackSessionsList(record, ctx, update.messageId);
 		}
 	}
 
 	private async callbackObserve(
-		record: CallbackTokenRecord,
+		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
 		ctx: CallbackContext,
 		editMessageId: string | number | null,
 	): Promise<OutgoingReply> {
@@ -243,7 +256,27 @@ export class TelegramRemoteGateway {
 		return reply;
 	}
 
-	private async callbackStopArm(record: CallbackTokenRecord, ctx: CallbackContext): Promise<OutgoingReply> {
+	private async callbackSessionsList(
+		record: Extract<CallbackTokenRecord, { action: ListCallbackAction }>,
+		ctx: CallbackContext,
+		editMessageId: string | number | null,
+	): Promise<OutgoingReply> {
+		const status = await this.coordinator.getCoordinationStatus();
+		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
+		const reply = this.renderSessionsPage(
+			status,
+			{ filter: record.filter, query: record.query, page: record.page },
+			ctx,
+			editMessageId ?? undefined,
+		);
+		reply.callbackAnswer = { text: MESSAGES.callbackDone };
+		return reply;
+	}
+
+	private async callbackStopArm(
+		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
+		ctx: CallbackContext,
+	): Promise<OutgoingReply> {
 		if (!this.policy.enableStop) return this.answerOnly(MESSAGES.sessionControlDisabled);
 		const status = await this.coordinator.getCoordinationStatus();
 		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
@@ -261,7 +294,10 @@ export class TelegramRemoteGateway {
 		return reply;
 	}
 
-	private async callbackStopConfirm(token: string, record: CallbackTokenRecord): Promise<OutgoingReply> {
+	private async callbackStopConfirm(
+		token: string,
+		record: Extract<CallbackTokenRecord, { action: SessionCallbackAction }>,
+	): Promise<OutgoingReply> {
 		if (!this.policy.enableStop) return this.answerOnly(MESSAGES.sessionControlDisabled);
 		const status = await this.coordinator.getCoordinationStatus();
 		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
@@ -306,11 +342,50 @@ export class TelegramRemoteGateway {
 		};
 	}
 
+	private renderSessionsPage(
+		status: CoordinationStatus,
+		state: { filter: SessionFilter; query: string | null; page: number },
+		ctx: CallbackContext,
+		editMessageId?: string | number,
+	): ChatReply {
+		const query = state.query?.trim() || null;
+		const queryLower = query?.toLowerCase() ?? null;
+		const filtered = projectSessionRows(status)
+			.filter(row => isWithinRetention(row.summary.status, row.summary.lastActivityAt, this.now()))
+			.filter(row => this.matchesFilter(row.summary.status, state.filter))
+			.filter(row => {
+				if (!queryLower) return true;
+				const haystack =
+					`${row.summary.name} ${row.summary.sessionId} ${row.summary.branch ?? ""} ${row.rawSessionId}`.toLowerCase();
+				return haystack.includes(queryLower);
+			})
+			.map((row, index) => ({ ...row, index }))
+			.sort((a, b) => {
+				const liveDelta = Number(isTerminalStatus(a.summary.status)) - Number(isTerminalStatus(b.summary.status));
+				if (liveDelta !== 0) return liveDelta;
+				const timeDelta = this.timeValue(b.summary.lastActivityAt) - this.timeValue(a.summary.lastActivityAt);
+				return timeDelta !== 0 ? timeDelta : a.index - b.index;
+			});
+		const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+		const page = Math.min(Math.max(0, state.page), totalPages - 1);
+		const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+		const header = `Filter: ${state.filter} · page ${page + 1}/${totalPages} · ${filtered.length} sessions`;
+		const reply: ChatReply = {
+			kind: "chat",
+			text: `${renderSessionsListHtml(pageRows.map(row => row.summary))}\n${header}`,
+			parseMode: "HTML",
+			replyMarkup: this.sessionsKeyboard(pageRows, { filter: state.filter, query, page }, ctx, totalPages),
+		};
+		if (editMessageId !== undefined) reply.edit = { messageId: editMessageId };
+		return reply;
+	}
+
 	private sessionsKeyboard(
 		rows: Array<{ rawSessionId: string; summary: { name: string } }>,
+		state: { filter: SessionFilter; query: string | null; page: number },
 		ctx: CallbackContext,
-	): TelegramInlineKeyboardMarkup | undefined {
-		if (rows.length === 0) return undefined;
+		totalPages: number,
+	): TelegramInlineKeyboardMarkup {
 		const keyboard = rows.map(({ rawSessionId, summary }) => {
 			const name = summary.name.slice(0, BUTTON_NAME_MAX);
 			const row: TelegramInlineKeyboardButton[] = [
@@ -321,6 +396,38 @@ export class TelegramRemoteGateway {
 			}
 			return row;
 		});
+		keyboard.push(
+			(["live", "blocked", "done", "all"] as const).map(filter => ({
+				text: filter === state.filter ? `[${filter}]` : filter,
+				callbackData: this.issueList(
+					{ action: "sessions_filter", filter, query: state.query, page: 0 },
+					ctx,
+					this.richTtl,
+				),
+			})),
+		);
+		const nav: TelegramInlineKeyboardButton[] = [];
+		if (state.page > 0) {
+			nav.push({
+				text: "Prev",
+				callbackData: this.issueList(
+					{ action: "sessions_page", filter: state.filter, query: state.query, page: state.page - 1 },
+					ctx,
+					this.richTtl,
+				),
+			});
+		}
+		if (state.page < totalPages - 1) {
+			nav.push({
+				text: "Next",
+				callbackData: this.issueList(
+					{ action: "sessions_page", filter: state.filter, query: state.query, page: state.page + 1 },
+					ctx,
+					this.richTtl,
+				),
+			});
+		}
+		if (nav.length > 0) keyboard.push(nav);
 		return { inline_keyboard: keyboard };
 	}
 
@@ -345,13 +452,16 @@ export class TelegramRemoteGateway {
 		};
 	}
 
-	private issue(
-		action: CallbackTokenRecord["action"],
-		sessionId: string,
+	private issue(action: SessionCallbackAction, sessionId: string, ctx: CallbackContext, ttlMs: number): string {
+		return this.tokens.issue({ action, sessionId, chatId: ctx.chatId, userId: ctx.userId, ttlMs });
+	}
+
+	private issueList(
+		payload: { action: ListCallbackAction; filter: SessionFilter; query: string | null; page: number },
 		ctx: CallbackContext,
 		ttlMs: number,
 	): string {
-		return this.tokens.issue({ action, sessionId, chatId: ctx.chatId, userId: ctx.userId, ttlMs });
+		return this.tokens.issue({ ...payload, chatId: ctx.chatId, userId: ctx.userId, ttlMs });
 	}
 
 	// --- Helpers ---
@@ -380,6 +490,24 @@ export class TelegramRemoteGateway {
 		};
 	}
 
+	private matchesFilter(status: SessionStatus, filter: SessionFilter): boolean {
+		switch (filter) {
+			case "live":
+				return !isTerminalStatus(status);
+			case "blocked":
+				return status === "blocked" || status === "waiting_for_input";
+			case "done":
+				return status === "done";
+			case "all":
+				return true;
+		}
+	}
+
+	private timeValue(iso: string | null): number {
+		if (!iso) return 0;
+		const value = Date.parse(iso);
+		return Number.isFinite(value) ? value : 0;
+	}
 	private isAuthorized(userId: string | null, chatId: string): boolean {
 		if (userId !== null && this.policy.allowedUserIds.has(userId)) return true;
 		return this.policy.allowedChatIds.has(chatId);

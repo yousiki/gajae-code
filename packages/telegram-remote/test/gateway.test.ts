@@ -340,3 +340,130 @@ describe("rich messaging + callbacks", () => {
 		expect(coordinator.calls.at(-1)?.args).toMatchObject({ sessionId: LONG_ID, status: "cancelled" });
 	});
 });
+
+function browsingStatus(
+	count: number,
+	overrides: Array<{
+		id: string;
+		branch?: string;
+		state?: string;
+		turn?: string;
+		live?: boolean;
+		updatedAt?: string;
+	}> = [],
+): CoordinationStatus {
+	const sessions = [];
+	const sessionStates = [];
+	const turns = [];
+	for (let i = 0; i < count; i += 1) {
+		const id = `sess-${String(i + 1).padStart(2, "0")}`;
+		sessions.push({ session_id: id, branch: `branch-${i + 1}` });
+		sessionStates.push({
+			session_id: id,
+			state: "running",
+			live: true,
+			updated_at: `2026-06-15T00:${String(i).padStart(2, "0")}:00.000Z`,
+		});
+		turns.push({ session_id: id, status: "active", turn_id: `turn-${i + 1}` });
+	}
+	for (const item of overrides) {
+		sessions.push({ session_id: item.id, branch: item.branch ?? "feature-special" });
+		sessionStates.push({
+			session_id: item.id,
+			state: item.state ?? "running",
+			live: item.live ?? true,
+			updated_at: item.updatedAt ?? "2026-06-15T01:00:00.000Z",
+		});
+		if (item.turn) turns.push({ session_id: item.id, status: item.turn, turn_id: `turn-${item.id}` });
+	}
+	return { ok: true, sessions, sessionStates, turns };
+}
+
+describe("rich multi-session browsing", () => {
+	test("/sessions <query> filters by substring", async () => {
+		coordinator.status = browsingStatus(2, [{ id: LONG_ID, branch: "needle-branch" }]);
+		const gateway = makeGateway({ enableRichMessages: true });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions needle" })));
+		expect(reply.text).toContain("needle-branch");
+		expect(reply.text).toContain("1 sessions");
+		expect(reply.text).not.toContain("branch-1");
+		expect(reply.text).not.toContain(LONG_ID);
+	});
+
+	test("filter buttons are present, opaque, bounded, and contain no filter/query/raw id", async () => {
+		coordinator.status = browsingStatus(1, [{ id: LONG_ID, branch: "needle-branch" }]);
+		const gateway = makeGateway({ enableRichMessages: true });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions needle" })));
+		for (const label of ["live", "blocked", "done", "[all]"]) {
+			expect(buttons(reply).find(b => b.text === label)).toBeDefined();
+		}
+		for (const b of buttons(reply)) {
+			expect(b.callbackData.startsWith("gtr:v1:")).toBe(true);
+			expect(Buffer.byteLength(b.callbackData, "utf8")).toBeLessThanOrEqual(64);
+			expect(b.callbackData).not.toContain("live");
+			expect(b.callbackData).not.toContain("blocked");
+			expect(b.callbackData).not.toContain("done");
+			expect(b.callbackData).not.toContain("all");
+			expect(b.callbackData).not.toContain("needle");
+			expect(b.callbackData).not.toContain(LONG_ID);
+		}
+	});
+
+	test("paginates at 8 rows and Next callback renders page 2", async () => {
+		coordinator.status = browsingStatus(9);
+		const gateway = makeGateway({ enableRichMessages: true, enableStop: false });
+		const first = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		expect(buttons(first).filter(b => b.text.startsWith("Observe"))).toHaveLength(8);
+		expect(first.text).toContain("page 1/2");
+		const next = buttons(first).find(b => b.text === "Next")!;
+		const second = asChat(await gateway.handleUpdate(callback({ data: next.callbackData, messageId: 44 })));
+		expect(second.text).toContain("page 2/2");
+		expect(buttons(second).filter(b => b.text.startsWith("Observe"))).toHaveLength(1);
+		expect(second.edit).toEqual({ messageId: 44 });
+	});
+
+	test("every list callback_data is <=64 bytes and never contains long raw id", async () => {
+		coordinator.status = browsingStatus(10, [{ id: LONG_ID, branch: "long" }]);
+		const gateway = makeGateway({ enableRichMessages: true });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		for (const b of buttons(reply)) {
+			expect(Buffer.byteLength(b.callbackData, "utf8")).toBeLessThanOrEqual(64);
+			expect(b.callbackData).not.toContain(LONG_ID);
+		}
+	});
+
+	test("unauthorized list callback is answer-only and makes no coordinator call", async () => {
+		coordinator.status = browsingStatus(1);
+		const gateway = makeGateway({ enableRichMessages: true });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		const filter = buttons(reply).find(b => b.text === "live")!;
+		const before = coordinator.calls.length;
+		const denied = await gateway.handleUpdate(callback({ userId: "999", chatId: "999", data: filter.callbackData }));
+		expect(denied.kind).toBe("callback_answer");
+		expect(coordinator.calls.length).toBe(before);
+	});
+
+	test("terminal/dead sessions older than 24h are excluded but within 24h are included", async () => {
+		clock = Date.parse("2026-06-16T00:00:00.000Z");
+		coordinator.status = browsingStatus(0, [
+			{ id: "recent-done", state: "completed", turn: "completed", updatedAt: "2026-06-15T01:00:00.000Z" },
+			{ id: "old-done", state: "completed", turn: "completed", updatedAt: "2026-06-14T23:00:00.000Z" },
+			{ id: "live-old", state: "running", turn: "active", updatedAt: "2026-06-01T00:00:00.000Z" },
+		]);
+		const gateway = makeGateway({ enableRichMessages: true, enableStop: false });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		expect(reply.text).toContain("recent-done");
+		expect(reply.text).toContain("live-old");
+		expect(reply.text).not.toContain("old-done");
+		expect(reply.text).toContain("2 sessions");
+	});
+
+	test("plain mode /sessions <query> filters the simple list by substring", async () => {
+		coordinator.status = browsingStatus(2, [{ id: "sess-aa", branch: "needle-branch" }]);
+		const gateway = makeGateway({ enableRichMessages: false });
+		const reply = asChat(await gateway.handleUpdate(message({ text: "/sessions needle" })));
+		expect(reply.parseMode).toBeUndefined();
+		expect(reply.text).toContain("needle-branch");
+		expect(reply.text).not.toContain("sess-02");
+	});
+});

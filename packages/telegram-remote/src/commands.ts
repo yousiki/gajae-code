@@ -35,8 +35,10 @@ export function parseCommand(text: string): ParsedCommand {
 		case "start":
 			// Telegram-conventional onboarding command; payload (if any) is ignored.
 			return { kind: "start" };
-		case "sessions":
-			return { kind: "sessions" };
+		case "sessions": {
+			const query = args.length > 0 ? args.join(" ").trim() : null;
+			return { kind: "sessions", query: query || null };
+		}
 		case "observe":
 			return { kind: "observe", sessionId: args[0] ?? null };
 		case "start-session": {
