@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@gajae-code/agent-core";
-import { RpcClient } from "@gajae-code/coding-agent";
+import { RpcClient } from "@gajae-code/coding-agent/modes/rpc/rpc-client";
 import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -19,9 +19,7 @@ type SocketSecurityModule = { assertSafeClientSocket(socketPath: string): Promis
 
 async function validateClientSocket(socketPath: string): Promise<void> {
 	const importer = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
-	const security = (await importer(
-		"@gajae-code/coding-agent/modes/rpc/rpc-socket-security.ts",
-	)) as SocketSecurityModule;
+	const security = (await importer("@gajae-code/coding-agent/modes/rpc/rpc-socket-security")) as SocketSecurityModule;
 	await security.assertSafeClientSocket(socketPath);
 }
 
