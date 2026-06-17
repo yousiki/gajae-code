@@ -454,6 +454,8 @@ export interface RpcWorkflowGateOption {
 
 export interface RpcWorkflowGateContext {
 	title?: string;
+	plan?: string;
+	source?: string;
 	prompt?: string;
 	summary?: string;
 	stage_state?: Record<string, unknown>;

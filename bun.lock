@@ -144,6 +144,9 @@
       "bin": {
         "gjc-telegram-remote": "./src/cli.ts",
       },
+      "dependencies": {
+        "@gajae-code/coding-agent": "catalog:",
+      },
       "devDependencies": {
         "@types/bun": "catalog:",
       },

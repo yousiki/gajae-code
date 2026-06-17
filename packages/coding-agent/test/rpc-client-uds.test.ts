@@ -161,7 +161,7 @@ describe("RpcClient UDS transport", () => {
 					);
 				}, 0);
 				socket.on("data", data => {
-					buffered += new TextDecoder().decode(data);
+					buffered += typeof data === "string" ? data : new TextDecoder().decode(data);
 					let nl = buffered.indexOf("\n");
 					while (nl >= 0) {
 						const line = buffered.slice(0, nl).trim();
