@@ -25,7 +25,7 @@ export const PtySession = nativeBindings.PtySession;
 export const Shell = nativeBindings.Shell;
 
 // functions
-export const __piNativesV0_6_0 = nativeBindings.__piNativesV0_6_0;
+export const __piNativesV0_6_1 = nativeBindings.__piNativesV0_6_1;
 export const applyBashFixups = nativeBindings.applyBashFixups;
 export const astEdit = nativeBindings.astEdit;
 export const astGrep = nativeBindings.astGrep;
