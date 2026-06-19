@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { Buffer } from "node:buffer";
 import type { Args } from "@gajae-code/coding-agent/cli/args";
 import {
@@ -22,6 +22,15 @@ function args(overrides: Partial<Args> = {}): Args {
 }
 
 const interactiveTty = { stdin: true, stdout: true };
+type SpawnSyncResult = Bun.SyncSubprocess<"pipe", "pipe">;
+
+function spawnResult(exitCode: number, stdout: string, stderr = ""): SpawnSyncResult {
+	return {
+		exitCode,
+		stdout: Buffer.from(stdout),
+		stderr: Buffer.from(stderr),
+	} as SpawnSyncResult;
+}
 function decodePowerShellEncodedCommand(command: string): string {
 	const match = command.match(/ -EncodedCommand (?<encoded>[A-Za-z0-9+/=]+)$/);
 	if (!match?.groups?.encoded) throw new Error(`missing encoded command: ${command}`);
@@ -39,6 +48,7 @@ function stderrError(code: string): Error {
 describe("default GJC tmux launch", () => {
 	afterEach(() => {
 		process.stderr.write = originalStderrWrite;
+		vi.restoreAllMocks();
 	});
 
 	it("builds project and branch tmux window titles", () => {
@@ -75,6 +85,7 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			existingBranchSessionName: null,
 			currentBranch: "feature/demo",
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
@@ -97,9 +108,31 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeUndefined();
+	});
+
+	it("does not invoke tmux session listing when existing session lookup is injected", () => {
+		const spawnSyncSpy = spyOn(Bun, "spawnSync");
+		const plan = buildDefaultTmuxLaunchPlan({
+			parsed: args({ messages: ["hello world"], tmux: true }),
+			rawArgs: ["--tmux", "hello world"],
+			cwd: "/repo",
+			env: {},
+			argv: ["bun", "packages/coding-agent/src/cli.ts"],
+			execPath: "/bin/bun",
+			platform: "darwin",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
+		});
+
+		expect(plan).toBeDefined();
+		expect(spawnSyncSpy).not.toHaveBeenCalled();
 	});
 
 	it("plans an interactive --tmux root launch inside a new GJC tmux session", () => {
@@ -113,6 +146,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeDefined();
@@ -138,6 +173,8 @@ describe("default GJC tmux launch", () => {
 			platform: "win32",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeDefined();
@@ -162,6 +199,8 @@ describe("default GJC tmux launch", () => {
 			platform: "win32",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeDefined();
@@ -187,6 +226,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeDefined();
@@ -208,6 +249,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan?.innerCommand).not.toContain("$bunfs");
@@ -261,6 +304,9 @@ describe("default GJC tmux launch", () => {
 	});
 
 	it("honors an explicit GJC_TMUX_SESSION override", () => {
+		spyOn(Bun, "spawnSync").mockReturnValue(
+			spawnResult(0, "custom-gjc\t1\t0\t1770000000\t1\troot\t1\t12345\tfeature/demo\tfeature-demo\t/repo"),
+		);
 		const plan = buildDefaultTmuxLaunchPlan({
 			parsed: args({ messages: ["hello world"], tmux: true }),
 			rawArgs: ["--tmux", "hello world"],
@@ -271,10 +317,63 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
 		});
 
 		expect(plan?.sessionName).toBe("custom-gjc");
+		expect(plan?.attachSessionName).toBe("custom-gjc");
 		expect(plan?.newSessionArgs.slice(0, 6)).toEqual(["new-session", "-d", "-s", "custom-gjc", "-c", "/repo"]);
+	});
+
+	it("does not reuse a same-branch session from another worktree path in the same project", () => {
+		const plan = buildDefaultTmuxLaunchPlan({
+			parsed: args({ messages: ["hello world"], tmux: true }),
+			rawArgs: ["--tmux", "hello world"],
+			cwd: "/repo/worktree-b",
+			env: {},
+			argv: ["bun", "packages/coding-agent/src/cli.ts"],
+			execPath: "/bin/bun",
+			platform: "darwin",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			currentBranch: "feature/demo",
+			project: "/repo/worktree-b",
+			existingBranchSessionName: null,
+		});
+
+		expect(plan?.attachSessionName).toBeUndefined();
+		expect(plan?.branch).toBe("feature/demo");
+		expect(plan?.project).toBe("/repo/worktree-b");
+	});
+
+	it("cleans up a newly created managed session when attach fails", () => {
+		const calls: { command: string; args: string[]; options: TmuxSpawnOptions }[] = [];
+		const diagnostics: string[] = [];
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ tmux: true }),
+			rawArgs: [],
+			cwd: "/repo",
+			env: {},
+			argv: ["/usr/local/bin/gjc"],
+			execPath: "/bin/bun",
+			platform: "darwin",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
+			diagnosticWriter: message => diagnostics.push(message),
+			spawnSync: (command, spawnArgs, options) => {
+				calls.push({ command, args: spawnArgs, options });
+				if (spawnArgs[0] === "attach-session") return { exitCode: 1, stderr: "attach failed" };
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		expect(calls.some(call => call.args[0] === "new-session")).toBe(true);
+		expect(calls.some(call => call.args[0] === "attach-session")).toBe(true);
+		expect(calls.some(call => call.args[0] === "kill-session")).toBe(true);
+		expect(diagnostics[0]).toStartWith("gjc --tmux failed after creating tmux session: attach failed.");
 	});
 
 	it("builds a session-scoped tmux profile without global tmux mutation", () => {
@@ -332,6 +431,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 		});
 
 		expect(plan).toBeDefined();
@@ -402,6 +503,7 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			existingBranchSessionName: null,
 			currentBranch: "feature/demo",
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
@@ -432,6 +534,7 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			existingBranchSessionName: null,
 			currentBranch: "feature/demo",
 			spawnSync: (command, spawnArgs) => {
 				calls.push({ command, args: spawnArgs });
@@ -501,6 +604,7 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			existingBranchSessionName: null,
 			currentBranch: "feature/demo",
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
@@ -529,6 +633,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
 				return { exitCode: 1 };
@@ -553,6 +659,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			diagnosticWriter: message => diagnostics.push(message),
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
@@ -582,6 +690,7 @@ describe("default GJC tmux launch", () => {
 			platform: "win32",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			existingBranchSessionName: null,
 			currentBranch: "issue-882",
 			diagnosticWriter: message => diagnostics.push(message),
 			spawnSync: (command, spawnArgs, options) => {
@@ -619,6 +728,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			diagnosticWriter: message => diagnostics.push(message),
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
@@ -630,7 +741,7 @@ describe("default GJC tmux launch", () => {
 		expect(handled).toBe(true);
 		expect(calls.some(call => call.args[0] === "new-session")).toBe(true);
 		expect(calls.some(call => call.args[0] === "attach-session")).toBe(true);
-		expect(calls.some(call => call.args[0] === "kill-session")).toBe(false);
+		expect(calls.some(call => call.args[0] === "kill-session")).toBe(true);
 		expect(diagnostics).toHaveLength(1);
 		expect(diagnostics[0]).toStartWith("gjc --tmux failed after creating tmux session: attach failed.");
 		expect(diagnostics[0].length).toBeLessThan(320);
@@ -653,6 +764,8 @@ describe("default GJC tmux launch", () => {
 			platform: "darwin",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			spawnSync: (_command, spawnArgs) => {
 				if (spawnArgs[0] === "attach-session") return { exitCode: 1, stderr: "attach failed" };
 				return { exitCode: 0 };
@@ -692,6 +805,8 @@ describe("default GJC tmux launch", () => {
 			platform: "linux",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
 				return { exitCode: 0 };
@@ -722,6 +837,8 @@ describe("default GJC tmux launch", () => {
 			platform: "linux",
 			tty: interactiveTty,
 			tmuxAvailable: true,
+			currentBranch: "",
+			existingBranchSessionName: null,
 			spawnSync: (command, spawnArgs, options) => {
 				calls.push({ command, args: spawnArgs, options });
 				return { exitCode: 0 };
