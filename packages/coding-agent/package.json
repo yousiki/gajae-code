@@ -285,10 +285,6 @@
 			"types": "./src/extensibility/custom-commands/bundled/ci-green/index.ts",
 			"import": "./src/extensibility/custom-commands/bundled/ci-green/index.ts"
 		},
-		"./extensibility/custom-commands/bundled/review": {
-			"types": "./src/extensibility/custom-commands/bundled/review/index.ts",
-			"import": "./src/extensibility/custom-commands/bundled/review/index.ts"
-		},
 		"./extensibility/custom-tools": {
 			"types": "./src/extensibility/custom-tools/index.ts",
 			"import": "./src/extensibility/custom-tools/index.ts"

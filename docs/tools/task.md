@@ -144,13 +144,10 @@ Artifacts and side channels:
   - Bundled GJC agents — retained four-agent surface.
   - Bundled agents — appended last from `packages/coding-agent/src/task/agents.ts`.
 - Bundled agent types
-  - `explore` — read-only scout with structured handoff output.
-  - `plan` — architecture/planning agent; may spawn `explore`.
-  - `designer` — UI/UX specialist.
-  - `reviewer` — review agent with `report_finding` extraction.
-  - `task` — general-purpose worker with full capabilities.
-  - `quick_task` — low-reasoning mechanical worker using the same task prompt body.
-  - `librarian` — source-grounded external API/library researcher.
+  - `executor` — autonomous implementation agent for bounded code changes and verification-ready edits.
+  - `planner` — read-only planning agent for sequencing, acceptance criteria, and handoff shape.
+  - `critic` — read-only plan critic that approves only actionable, verifiable plans.
+  - `architect` — read-only architecture/code-review agent with `report_finding` extraction and severity-rated findings.
 
 ## Side Effects
 - Filesystem
