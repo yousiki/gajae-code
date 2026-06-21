@@ -1411,6 +1411,12 @@ async function handleWrite(
 
 	const phase = typeof merged.current_phase === "string" ? merged.current_phase : undefined;
 	const active = merged.active !== false;
+	// Reflect the freshly stamped mode-state revision onto the in-memory payload so the
+	// active-state/HUD sync derives a `sourceRevision` from the persisted revision, not the
+	// stale pre-write value; otherwise the active-state writer stale-skips the update and the
+	// mirror keeps the prior phase (e.g. staying "interviewing" after a "handoff" write).
+	const stampedRevision = existingStateRevision(stamped);
+	if (typeof stampedRevision === "number") merged.state_revision = stampedRevision;
 	await syncWorkflowSkillState({ cwd, mode, sessionId, threadId, turnId, active, phase, payload: merged, receipt });
 	await touchStateActivityMarker(cwd, sessionId, filePath);
 

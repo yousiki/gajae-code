@@ -35,8 +35,6 @@ describe("G2 gjc ACL gate", () => {
 				[tool("write"), { path: ".gjc/state/foo.json", content: "{}" }],
 				[tool("edit"), { path: ".gjc/specs/spec.md", edits: [{ old_text: "a", new_text: "b" }] }],
 				[tool("ast_edit"), { paths: [".gjc/state/foo.json"], ops: [{ pat: "foo", out: "bar" }] }],
-				[tool("bash"), { command: "echo x > .gjc/state/foo.json" }],
-				[tool("bash"), { command: "rm -rf .gjc/specs" }],
 			];
 
 			for (const [targetTool, args] of blockedCases) {
@@ -65,6 +63,13 @@ describe("G2 gjc ACL gate", () => {
 				args: { path: "src/product.ts", content: "x" },
 			});
 			expect(productWrite.blocked).toBe(false);
+
+			// Per #951 the mutation guard never blocks `bash`; `.gjc/**` is gated only
+			// through the dedicated write/edit/ast_edit tools, so bash targeting .gjc is allowed.
+			for (const command of ["echo x > .gjc/state/foo.json", "rm -rf .gjc/specs"]) {
+				const gjcBash = await getDeepInterviewMutationDecision({ cwd, tool: tool("bash"), args: { command } });
+				expect(gjcBash.blocked).toBe(false);
+			}
 		});
 	});
 });

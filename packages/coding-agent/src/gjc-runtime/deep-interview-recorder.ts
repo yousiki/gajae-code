@@ -326,13 +326,21 @@ async function persistEnvelope(
 	payload.version ??= WORKFLOW_STATE_VERSION;
 	payload.active ??= true;
 	payload.current_phase ??= "interviewing";
-	await writeGuardedWorkflowEnvelopeAtomic(statePath, payload, {
+	const expectedRevision = existingStateRevision(envelope);
+	const writeResult = await writeGuardedWorkflowEnvelopeAtomic(statePath, payload, {
 		cwd,
 		policy: "source",
-		expectedRevision: existingStateRevision(envelope),
+		expectedRevision,
 		receipt: { cwd, skill: "deep-interview", owner: "gjc-runtime", command, sessionId, nowIso: now },
 		audit: { category: "state", verb: "write", owner: "gjc-runtime", skill: "deep-interview", sessionId },
 	});
+	// Reflect the freshly written revision back onto the in-memory envelope so a
+	// follow-up HUD sync derives its `sourceRevision` from the persisted revision
+	// (not the stale pre-write value), otherwise the active-state writer treats the
+	// newer HUD as stale and skips it (e.g. dropping the ambiguity chip after scoring).
+	if (writeResult.written && typeof expectedRevision === "number") {
+		(envelope as Record<string, unknown>).state_revision = expectedRevision + 1;
+	}
 	await writeSessionActivityMarker(cwd, sessionId, { writer: "deep-interview-recorder", path: statePath });
 }
 

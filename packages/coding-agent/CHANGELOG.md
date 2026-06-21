@@ -19,6 +19,7 @@
 - Rejected counterexample-only claims in research-plan regardless of `dropCondition` wording (#942).
 - Bounded computer-use screenshot inline images to avoid oversized payloads.
 - Tolerated missing session env in guard reads (#930).
+- Fixed a session-scoped active-state staleness bug where a freshly written mode-state revision was not reflected in the in-memory envelope, so the active-state/HUD writer skipped the newer update as stale — dropping the deep-interview ambiguity HUD chip after scoring and leaving the active-skills phase mirror behind a `handoff` transition.
 
 ### Documentation
 

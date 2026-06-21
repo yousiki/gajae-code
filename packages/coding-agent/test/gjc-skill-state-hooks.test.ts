@@ -664,14 +664,15 @@ describe("GJC native skill-state hooks", () => {
 		expect(blockedSpec.reason).toBe("gjc-target");
 		expect(blockedSpec.message).toContain("runtime-owned");
 
-		const blockedGjcBash = await getDeepInterviewMutationDecision({
+		// Per #951 the mutation guard never blocks `bash`, even for `.gjc/**` targets;
+		// `.gjc/**` is gated only through the dedicated write/edit/ast_edit tools.
+		const allowedGjcBash = await getDeepInterviewMutationDecision({
 			cwd: root,
 			sessionId: "session-rich",
 			tool: { name: "bash" } as never,
 			args: { command: "cat sample.md > .gjc/specs/deep-interview-sample.md" },
 		});
-		expect(blockedGjcBash.blocked).toBe(true);
-		expect(blockedGjcBash.reason).toBe("gjc-target");
+		expect(allowedGjcBash.blocked).toBe(false);
 
 		const blocked = await getDeepInterviewMutationDecision({
 			cwd: root,
