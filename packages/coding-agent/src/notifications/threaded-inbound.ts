@@ -19,6 +19,7 @@
 export interface InboundUpdate {
 	update_id?: unknown;
 	message?: {
+		message_id?: unknown;
 		text?: unknown;
 		chat?: { id?: unknown };
 		message_thread_id?: unknown;
@@ -37,7 +38,7 @@ export interface ThreadedInboundCtx {
 
 /** Outcome of routing an inbound update. */
 export type ThreadedInboundDecision =
-	| { kind: "inject"; sessionId: string; text: string; updateId: number; threadId: string }
+	| { kind: "inject"; sessionId: string; text: string; updateId: number; threadId: string; messageId?: number }
 	| { kind: "duplicate"; updateId: number }
 	| { kind: "ignore"; reason: string };
 
@@ -74,5 +75,6 @@ export function decideThreadedInbound(update: InboundUpdate, ctx: ThreadedInboun
 	const text = typeof message.text === "string" ? message.text.trim() : "";
 	if (!text) return { kind: "ignore", reason: "empty_text" };
 
-	return { kind: "inject", sessionId, text, updateId, threadId };
+	const messageId = typeof message.message_id === "number" ? message.message_id : undefined;
+	return { kind: "inject", sessionId, text, updateId, threadId, messageId };
 }

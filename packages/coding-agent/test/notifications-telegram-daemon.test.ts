@@ -515,6 +515,70 @@ describe("telegram daemon", () => {
 		releasePoll();
 		await runPromise;
 	});
+
+	test("pollOnce survives a transient getUpdates failure instead of crashing", async () => {
+		const agentDir = tempAgentDir();
+		const s = setPrivateAgentDir(settings(agentDir), agentDir);
+		let calls = 0;
+		const bot = {
+			async call(method: string): Promise<unknown> {
+				if (method === "getUpdates") {
+					calls++;
+					const err = new Error("The socket connection was closed unexpectedly.") as Error & { code?: string };
+					err.code = "ECONNRESET";
+					throw err;
+				}
+				return { ok: true, result: [] };
+			},
+		};
+		const daemon = new TelegramNotificationDaemon({
+			settings: s,
+			ownerId: "owner",
+			botToken: "tok",
+			chatId: "42",
+			botApi: bot,
+			setTimeoutImpl: ((cb: () => void) => {
+				cb();
+				return 0;
+			}) as any,
+		});
+		// Must resolve (not reject): the run loop relies on this never throwing.
+		await expect(daemon.pollOnce()).resolves.toBe(0);
+		expect(calls).toBe(1);
+	});
+
+	test("default botApi retries transient network failures before delivering", async () => {
+		const agentDir = tempAgentDir();
+		const s = setPrivateAgentDir(settings(agentDir), agentDir);
+		let attempts = 0;
+		const fetchImpl = (async () => {
+			attempts++;
+			if (attempts < 3) {
+				const err = new Error("socket reset") as Error & { code?: string };
+				err.code = "ECONNRESET";
+				throw err;
+			}
+			return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), {
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+		const daemon = new TelegramNotificationDaemon({
+			settings: s,
+			ownerId: "owner",
+			botToken: "tok",
+			chatId: "42",
+			fetchImpl,
+			setTimeoutImpl: ((cb: () => void) => {
+				cb();
+				return 0;
+			}) as any,
+		});
+		const res = (await (daemon as any).botApi.call("sendMessage", { chat_id: 42, text: "hi" })) as {
+			result?: { message_id?: number };
+		};
+		expect(attempts).toBe(3);
+		expect(res.result?.message_id).toBe(7);
+	});
 });
 
 test("daemon registers in-thread config commands and drops stale rpc/answer commands", async () => {
@@ -672,4 +736,75 @@ test("identity_header without title or repo falls back to the GJC session label"
 	const createTopic = bot.calls.find(c => c.method === "createForumTopic");
 	expect(createTopic).toBeTruthy();
 	expect(createTopic!.body.name).toBe("GJC 123456");
+});
+test("activity busy frame sends a typing chat action into the session topic", async () => {
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+	});
+	const session = { sessionId: "S", token: "tok", ws: { readyState: 1, send() {} }, pending: new Map() };
+	// Create the topic first so the typing action has somewhere to go.
+	await daemon.handleSessionMessage(session as any, {
+		type: "identity_header",
+		sessionId: "S",
+		repo: "r",
+		branch: "b",
+	});
+	await daemon.handleSessionMessage(session as any, { type: "activity", sessionId: "S", state: "busy" });
+	const typing = bot.calls.find(c => c.method === "sendChatAction");
+	expect(typing).toBeTruthy();
+	expect(typing!.body.action).toBe("typing");
+	expect(Number(typing!.body.message_thread_id)).toBeGreaterThan(0);
+	// Idle clears busy; activity idle itself sends no chat action.
+	bot.calls = [];
+	await daemon.handleSessionMessage(session as any, { type: "activity", sessionId: "S", state: "idle" });
+	expect(bot.calls.some(c => c.method === "sendChatAction")).toBe(false);
+});
+
+test("inbound thread message gets a queued reaction, flipped to consumed on ack", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	// Create the topic and learn its thread id from the pinned identity message.
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	const threadId = bot.calls.find(c => c.method === "sendMessage")!.body.message_thread_id;
+	bot.calls = [];
+
+	await daemon.handleTelegramUpdate({
+		update_id: 7,
+		message: { chat: { id: 42 }, message_thread_id: threadId, message_id: 555, text: "steer me" },
+	});
+	// The user turn is forwarded to the session…
+	expect(JSON.parse(FakeWs.instances[0]!.sent[0]!)).toMatchObject({
+		type: "user_message",
+		text: "steer me",
+		updateId: 7,
+	});
+	// …and the originating message gets the queued reaction.
+	const queued = bot.calls.find(c => c.method === "setMessageReaction");
+	expect(queued).toBeTruthy();
+	expect(queued!.body.message_id).toBe(555);
+	expect(queued!.body.reaction[0].emoji).toBe("👀");
+
+	bot.calls = [];
+	await daemon.handleSessionMessage(session, { type: "inbound_ack", sessionId: "S", updateId: 7, state: "consumed" });
+	const consumed = bot.calls.find(c => c.method === "setMessageReaction");
+	expect(consumed).toBeTruthy();
+	expect(consumed!.body.message_id).toBe(555);
+	expect(consumed!.body.reaction[0].emoji).toBe("✅");
 });

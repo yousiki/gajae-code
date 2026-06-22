@@ -84,6 +84,71 @@ const RATE_LIMIT_FLUSH_INTERVAL_MS = 1_000;
 // buffered ask is delivered up to 25s late — or never, if the user answers the
 // local ask first (which clears the buffered ask).
 const SESSION_SCAN_INTERVAL_MS = 1_000;
+// Transient Telegram API delivery is retried this many times before giving up.
+const BOT_API_RETRY_ATTEMPTS = 3;
+// Backoff after a failed getUpdates long-poll so a persistent outage does not
+// busy-loop the daemon.
+const POLL_BACKOFF_MS = 1_000;
+// Telegram clears a chat action after ~5s; refresh slightly sooner to keep the
+// typing indicator alive while the agent is busy.
+const TYPING_REFRESH_INTERVAL_MS = 4_000;
+// Native reactions used as a two-stage delivery double-check on inbound thread
+// messages: queued on receipt, consumed once a turn picks the message up.
+const QUEUED_REACTION = "👀";
+const CONSUMED_REACTION = "✅";
+
+/**
+ * Whether `err` is a transient network failure worth retrying. Telegram API
+ * calls over HTTP/2 occasionally surface mid-stream `ECONNRESET` (and similar)
+ * that the global h2 fallback does not catch; treating these as fatal drops ask
+ * notifications and (in the polling loop) crashes the daemon.
+ */
+function isTransientNetworkError(err: unknown): boolean {
+	const code = (err as { code?: unknown } | null)?.code;
+	if (typeof code === "string") {
+		const transient = new Set([
+			"ECONNRESET",
+			"ECONNREFUSED",
+			"ETIMEDOUT",
+			"EPIPE",
+			"ENOTFOUND",
+			"EAI_AGAIN",
+			"UND_ERR_SOCKET",
+			"ConnectionClosed",
+			"ConnectionReset",
+			"ConnectionRefused",
+			"ConnectionTimeout",
+			"FailedToOpenSocket",
+		]);
+		if (transient.has(code)) return true;
+	}
+	const message = (err as { message?: unknown } | null)?.message;
+	return (
+		typeof message === "string" &&
+		/socket connection was closed|econnreset|fetch failed|network|timed out|terminated/i.test(message)
+	);
+}
+
+/** `fetch` with bounded retries on transient network failures. */
+async function fetchWithRetry(
+	fetchImpl: typeof fetch,
+	url: string,
+	init: RequestInit,
+	sleep: (ms: number) => Promise<void>,
+	attempts: number = BOT_API_RETRY_ATTEMPTS,
+): Promise<Response> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			return await fetchImpl(url, init);
+		} catch (err) {
+			lastErr = err;
+			if (!isTransientNetworkError(err) || attempt === attempts - 1) throw err;
+			await sleep(200 * 2 ** attempt);
+		}
+	}
+	throw lastErr;
+}
 
 export function daemonPaths(agentDir: string): DaemonPaths {
 	const dir = path.join(agentDir, "notifications");
@@ -422,6 +487,11 @@ export class TelegramNotificationDaemon {
 	private flushTimer: ReturnType<typeof setInterval> | undefined;
 	private scanTimer: ReturnType<typeof setInterval> | undefined;
 	private scanning = false;
+	private typingTimer: ReturnType<typeof setInterval> | undefined;
+	/** Sessions whose agent loop is currently busy (drives the typing indicator). */
+	private readonly busy = new Set<string>();
+	/** Inbound update id → originating Telegram message, for delivery reactions. */
+	private readonly inboundReactions = new Map<number, { messageId: number }>();
 
 	constructor(private readonly opts: TelegramDaemonOptions) {
 		this.fsImpl = opts.fs ?? nodeFs;
@@ -431,6 +501,8 @@ export class TelegramNotificationDaemon {
 				const apiBase = opts.apiBase ?? "https://api.telegram.org";
 				const url = `${apiBase}/bot${opts.botToken}/${method}`;
 				const fetchImpl = opts.fetchImpl ?? fetch;
+				const setTimeoutImpl = opts.setTimeoutImpl ?? setTimeout;
+				const sleep = (ms: number) => new Promise<void>(resolve => setTimeoutImpl(resolve, ms));
 				// sendPhoto with base64 bytes must be a multipart upload (Telegram does
 				// not accept base64 in JSON). Other methods stay JSON.
 				const photoBody = body as { photo?: unknown; mime?: unknown } | null;
@@ -449,14 +521,19 @@ export class TelegramNotificationDaemon {
 					if (b.caption) form.set("caption", b.caption);
 					if (b.parse_mode) form.set("parse_mode", String(b.parse_mode));
 					form.set("photo", new Blob([Buffer.from(b.photo, "base64")], { type: b.mime ?? "image/png" }), "image");
-					const res = await fetchImpl(url, { method: "POST", body: form });
+					const res = await fetchWithRetry(fetchImpl, url, { method: "POST", body: form }, sleep);
 					return res.json();
 				}
-				const res = await fetchImpl(url, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(body),
-				});
+				const res = await fetchWithRetry(
+					fetchImpl,
+					url,
+					{
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(body),
+					},
+					sleep,
+				);
 				return res.json();
 			},
 		};
@@ -510,6 +587,7 @@ export class TelegramNotificationDaemon {
 		});
 		ws.addEventListener("close", () => {
 			this.sessions.delete(sessionId);
+			this.busy.delete(sessionId);
 		});
 	}
 
@@ -659,7 +737,72 @@ export class TelegramNotificationDaemon {
 		this.scanTimer = undefined;
 	}
 
+	/** Send a single `typing` chat action into a busy session's topic (best-effort). */
+	private async sendTyping(sessionId: string): Promise<void> {
+		const topicId = this.topics.get(sessionId)?.topicId;
+		if (!topicId) return;
+		try {
+			await this.botApi.call("sendChatAction", {
+				chat_id: this.opts.chatId,
+				message_thread_id: Number(topicId),
+				action: "typing",
+			});
+		} catch {
+			// Best-effort: a failed chat action must never stop the daemon.
+		}
+	}
+
+	/** Set a native reaction on an inbound thread message (best-effort). */
+	private async setReaction(messageId: number, emoji: string): Promise<void> {
+		try {
+			await this.botApi.call("setMessageReaction", {
+				chat_id: this.opts.chatId,
+				message_id: messageId,
+				reaction: [{ type: "emoji", emoji }],
+			});
+		} catch {
+			// Best-effort: reactions may be disallowed in the chat; never throw.
+		}
+	}
+
+	private startTypingTimer(): void {
+		if (this.typingTimer) return;
+		const setIntervalImpl = this.opts.setIntervalImpl ?? setInterval;
+		this.typingTimer = setIntervalImpl(() => {
+			if (!this.running || this.busy.size === 0) return;
+			for (const sessionId of this.busy) void this.sendTyping(sessionId);
+		}, TYPING_REFRESH_INTERVAL_MS);
+	}
+
+	private stopTypingTimer(): void {
+		if (!this.typingTimer) return;
+		const clearIntervalImpl = this.opts.clearIntervalImpl ?? clearInterval;
+		clearIntervalImpl(this.typingTimer);
+		this.typingTimer = undefined;
+	}
+
 	async handleSessionMessage(session: SessionSocket, msg: any): Promise<void> {
+		// Live typing indicator: track busy/idle per session and push an immediate
+		// chat action so "typing…" appears without waiting for the refresh tick.
+		if (msg?.type === "activity") {
+			if (msg.state === "busy") {
+				this.busy.add(session.sessionId);
+				await this.sendTyping(session.sessionId);
+			} else {
+				this.busy.delete(session.sessionId);
+			}
+			return;
+		}
+		// Inbound delivery double-check: flip the queued reaction to the consumed
+		// reaction once the session reports a turn picked the message up.
+		if (msg?.type === "inbound_ack" && typeof msg.updateId === "number") {
+			const target = this.inboundReactions.get(msg.updateId);
+			if (target && msg.state === "consumed") {
+				this.inboundReactions.delete(msg.updateId);
+				await this.setReaction(target.messageId, CONSUMED_REACTION);
+			}
+			return;
+		}
 		if (typeof msg?.type === "string" && TelegramNotificationDaemon.THREADED_FRAMES.has(msg.type)) {
 			const send = renderThreadedFrame(msg);
 			if (!send) return;
@@ -802,6 +945,13 @@ export class TelegramNotificationDaemon {
 									},
 						),
 					);
+					// User turns get a native delivery double-check: queued on receipt,
+					// flipped to consumed when the session acks the turn that picks it
+					// up. Config commands are not user turns and get no reaction.
+					if (!cfg && inbound.messageId !== undefined) {
+						this.inboundReactions.set(inbound.updateId, { messageId: inbound.messageId });
+						await this.setReaction(inbound.messageId, QUEUED_REACTION);
+					}
 				}
 				return;
 			}
@@ -830,14 +980,28 @@ export class TelegramNotificationDaemon {
 	}
 
 	async pollOnce(): Promise<number> {
-		const body = (await this.botApi.call("getUpdates", {
-			offset: this.offset,
-			timeout: 25,
-			allowed_updates: ["message", "callback_query"],
-		})) as { result?: Array<{ update_id: number } & Record<string, unknown>> };
+		let body: { result?: Array<{ update_id: number } & Record<string, unknown>> };
+		try {
+			body = (await this.botApi.call("getUpdates", {
+				offset: this.offset,
+				timeout: 25,
+				allowed_updates: ["message", "callback_query"],
+			})) as { result?: Array<{ update_id: number } & Record<string, unknown>> };
+		} catch (err) {
+			// A transient Telegram API failure (e.g. ECONNRESET on the long-poll) must
+			// never crash the daemon — that silently stops all delivery, including ask
+			// notifications. Log, back off, and let the run loop retry.
+			console.error("notifications daemon: getUpdates failed:", err);
+			await new Promise(resolve => (this.opts.setTimeoutImpl ?? setTimeout)(resolve, POLL_BACKOFF_MS));
+			return 0;
+		}
 		for (const update of body.result ?? []) {
 			this.offset = update.update_id + 1;
-			await this.handleTelegramUpdate(update);
+			try {
+				await this.handleTelegramUpdate(update);
+			} catch (err) {
+				console.error("notifications daemon: handleTelegramUpdate failed:", err);
+			}
 		}
 		return body.result?.length ?? 0;
 	}
@@ -868,6 +1032,7 @@ export class TelegramNotificationDaemon {
 		if (!this.running) return;
 		this.startFlushTimer();
 		this.startScanTimer();
+		this.startTypingTimer();
 		try {
 			await this.registerBotCommands();
 			await this.loadAliases();
@@ -897,6 +1062,7 @@ export class TelegramNotificationDaemon {
 		} finally {
 			this.stopFlushTimer();
 			this.stopScanTimer();
+			this.stopTypingTimer();
 			await releaseDaemonOwnership({
 				settings: this.opts.settings,
 				ownerId: this.opts.ownerId,
