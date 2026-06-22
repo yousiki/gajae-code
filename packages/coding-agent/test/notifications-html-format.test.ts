@@ -54,6 +54,20 @@ describe("markdownToTelegramHtml (AC5)", () => {
 		expect(markdownToTelegramHtml("**oops")).toBe("**oops");
 		expect(markdownToTelegramHtml("a < b")).toBe("a &lt; b");
 	});
+
+	test("GFM tables render as an aligned monospace <pre> block", () => {
+		const md = "| Name | Age |\n| --- | ---: |\n| Alice | 30 |\n| Bob | 1 |";
+		expect(markdownToTelegramHtml(md)).toBe("<pre>Name  | Age\n------|----\nAlice |  30\nBob   |   1</pre>");
+	});
+
+	test("table cell content is escaped and not re-parsed as markup", () => {
+		const md = "| h |\n| --- |\n| <b>**x**</b> |";
+		expect(markdownToTelegramHtml(md)).toBe("<pre>h           \n------------\n&lt;b&gt;**x**&lt;/b&gt;</pre>");
+	});
+
+	test("a row without a separator stays literal (not a table)", () => {
+		expect(markdownToTelegramHtml("a | b\nc | d")).toBe("a | b\nc | d");
+	});
 });
 
 describe("truncateTelegramHtml (AC7)", () => {

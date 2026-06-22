@@ -62,11 +62,120 @@ function isSafeUrl(url: string): boolean {
 	return /^(https?:\/\/|mailto:)/i.test(url);
 }
 
+/** Column alignment parsed from a GFM table separator cell. */
+type ColumnAlign = "left" | "right" | "center";
+
+/** Split a markdown table row into trimmed cells, honoring escaped `\|`. */
+function splitTableRow(line: string): string[] {
+	let s = line.trim();
+	if (s.startsWith("|")) s = s.slice(1);
+	if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+	const cells: string[] = [];
+	let cur = "";
+	for (let i = 0; i < s.length; i++) {
+		const ch = s[i]!;
+		if (ch === "\\" && s[i + 1] === "|") {
+			cur += "|";
+			i++;
+			continue;
+		}
+		if (ch === "|") {
+			cells.push(cur);
+			cur = "";
+			continue;
+		}
+		cur += ch;
+	}
+	cells.push(cur);
+	return cells.map(c => c.trim());
+}
+
+/** A line is a candidate table row when it contains an unescaped `|`. */
+function looksLikeTableRow(line: string): boolean {
+	return /(?:^|[^\\])\|/.test(line);
+}
+
+/** A separator row has only dashes/colons/spaces per cell, with at least one dash. */
+function isTableSeparator(line: string): boolean {
+	if (!looksLikeTableRow(line)) return false;
+	const cells = splitTableRow(line);
+	return cells.length > 0 && cells.every(c => /^:?-+:?$/.test(c));
+}
+
+/** Derive a column alignment from a separator cell (`:---`, `---:`, `:---:`). */
+function parseAlign(cell: string): ColumnAlign {
+	const c = cell.trim();
+	const left = c.startsWith(":");
+	const right = c.endsWith(":");
+	if (left && right) return "center";
+	if (right) return "right";
+	return "left";
+}
+
+/** Render parsed table parts as an aligned, monospace-friendly plain-text grid. */
+function renderTableText(header: string[], aligns: ColumnAlign[], body: string[][]): string {
+	const rows = [header, ...body];
+	const cols = Math.max(header.length, ...body.map(r => r.length));
+	const widths: number[] = [];
+	for (let c = 0; c < cols; c++) {
+		let w = 1;
+		for (const row of rows) w = Math.max(w, (row[c] ?? "").length);
+		widths[c] = w;
+	}
+	const padCell = (value: string, c: number): string => {
+		const width = widths[c]!;
+		const pad = width - value.length;
+		if (pad <= 0) return value;
+		const align = aligns[c] ?? "left";
+		if (align === "right") return " ".repeat(pad) + value;
+		if (align === "center") {
+			const leftPad = Math.floor(pad / 2);
+			return " ".repeat(leftPad) + value + " ".repeat(pad - leftPad);
+		}
+		return value + " ".repeat(pad);
+	};
+	const renderRow = (row: string[]): string =>
+		Array.from({ length: cols }, (_v, c) => padCell(row[c] ?? "", c)).join(" | ");
+	const divider = widths.map(w => "-".repeat(w)).join("-|-");
+	return [renderRow(header), divider, ...body.map(renderRow)].join("\n");
+}
+
+/**
+ * Replace GFM tables with stashed monospace `<pre>` blocks. Telegram HTML has no
+ * table primitive, so a header row followed by a `|---|` separator is rendered as
+ * an aligned plain-text grid (cell content escaped by `pre`).
+ */
+function convertMarkdownTables(text: string, stash: (html: string) => string): string {
+	const lines = text.split("\n");
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const headerLine = lines[i]!;
+		const separatorLine = lines[i + 1];
+		if (looksLikeTableRow(headerLine) && separatorLine !== undefined && isTableSeparator(separatorLine)) {
+			const header = splitTableRow(headerLine);
+			const aligns = splitTableRow(separatorLine).map(parseAlign);
+			const body: string[][] = [];
+			let j = i + 2;
+			for (; j < lines.length; j++) {
+				const row = lines[j]!;
+				if (!looksLikeTableRow(row) || isTableSeparator(row)) break;
+				body.push(splitTableRow(row));
+			}
+			out.push(stash(pre(renderTableText(header, aligns, body))));
+			i = j - 1;
+			continue;
+		}
+		out.push(headerLine);
+	}
+	return out.join("\n");
+}
+
 /**
  * Convert a bounded markdown subset into Telegram HTML. Supported: fenced code,
  * inline code, `**bold**`, `*italic*`, `[text](url)` (safe schemes only),
- * `#` headers, and `>` blockquotes. Unsupported or malformed markdown is left as
- * escaped literal text — never emitted as unbalanced tags.
+ * `#` headers, `>` blockquotes, and GFM tables (rendered as a monospace block).
+ * Unsupported or malformed markdown is left as escaped literal text — never
+ * emitted as unbalanced tags.
  */
 export function markdownToTelegramHtml(markdown: string): string {
 	const placeholders: string[] = [];
@@ -80,6 +189,9 @@ export function markdownToTelegramHtml(markdown: string): string {
 
 	// 1. Fenced code blocks (protect literal content before any other transform).
 	text = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_m, body: string) => stash(pre(body)));
+
+	// 1b. GFM tables -> aligned monospace <pre> block (no native table primitive).
+	text = convertMarkdownTables(text, stash);
 
 	// 2. Inline code.
 	text = text.replace(/`([^`\n]+)`/g, (_m, body: string) => stash(code(body)));
