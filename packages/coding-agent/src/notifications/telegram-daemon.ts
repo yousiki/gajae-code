@@ -486,10 +486,15 @@ export class TelegramNotificationDaemon {
 	]);
 
 	private topicNameFor(sessionId: string, msg: { title?: unknown; repo?: unknown; branch?: unknown }): string {
-		if (typeof msg?.title === "string" && msg.title) return msg.title;
 		const repo = typeof msg?.repo === "string" && msg.repo ? msg.repo : undefined;
 		const branch = typeof msg?.branch === "string" && msg.branch ? msg.branch : undefined;
-		if (repo) return branch ? `${repo}/${branch}` : repo;
+		const title = typeof msg?.title === "string" && msg.title ? msg.title : undefined;
+		// Name the topic "{repo}/{branch}" before a session title exists, then
+		// "{repo}/{branch} - {title}" once it does. Fall back to the session id
+		// only when no repo identity is available.
+		const base = repo ? (branch ? `${repo}/${branch}` : repo) : undefined;
+		if (base) return title ? `${base} - ${title}` : base;
+		if (title) return title;
 		return `GJC ${sessionId.slice(-6)}`;
 	}
 

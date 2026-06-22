@@ -98,15 +98,14 @@ function buildIdentity(
 	repo: string;
 	branch: string;
 	machine: string;
-	title: string;
+	title?: string;
 } {
 	const repo = readGitRepoName(cwd) ?? (path.basename(cwd) || cwd);
 	const branch = readGitBranch(cwd) ?? "(detached)";
-	// Topic title: "{repo}/{branch}" before the session title is auto-generated,
-	// then "{repo}/{branch} - {session title}" once it exists.
-	const base = `${repo}/${branch}`;
-	const title = sessionName ? `${base} - ${sessionName}` : base;
-	return { repo, branch, machine: os.hostname(), title };
+	// Send repo/branch and the raw session title separately; the consumer
+	// composes the topic name ("{repo}/{branch}" before the session title is
+	// auto-generated, then "{repo}/{branch} - {session title}" once it exists).
+	return { repo, branch, machine: os.hostname(), title: sessionName };
 }
 
 const execFileAsync = promisify(execFile);
