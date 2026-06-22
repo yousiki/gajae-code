@@ -89,6 +89,13 @@ const BOT_API_RETRY_ATTEMPTS = 3;
 // Backoff after a failed getUpdates long-poll so a persistent outage does not
 // busy-loop the daemon.
 const POLL_BACKOFF_MS = 1_000;
+// Telegram clears a chat action after ~5s; refresh slightly sooner to keep the
+// typing indicator alive while the agent is busy.
+const TYPING_REFRESH_INTERVAL_MS = 4_000;
+// Native reactions used as a two-stage delivery double-check on inbound thread
+// messages: queued on receipt, consumed once a turn picks the message up.
+const QUEUED_REACTION = "👀";
+const CONSUMED_REACTION = "✅";
 
 /**
  * Whether `err` is a transient network failure worth retrying. Telegram API
@@ -480,6 +487,11 @@ export class TelegramNotificationDaemon {
 	private flushTimer: ReturnType<typeof setInterval> | undefined;
 	private scanTimer: ReturnType<typeof setInterval> | undefined;
 	private scanning = false;
+	private typingTimer: ReturnType<typeof setInterval> | undefined;
+	/** Sessions whose agent loop is currently busy (drives the typing indicator). */
+	private readonly busy = new Set<string>();
+	/** Inbound update id → originating Telegram message, for delivery reactions. */
+	private readonly inboundReactions = new Map<number, { messageId: number }>();
 
 	constructor(private readonly opts: TelegramDaemonOptions) {
 		this.fsImpl = opts.fs ?? nodeFs;
@@ -575,6 +587,7 @@ export class TelegramNotificationDaemon {
 		});
 		ws.addEventListener("close", () => {
 			this.sessions.delete(sessionId);
+			this.busy.delete(sessionId);
 		});
 	}
 
@@ -724,7 +737,72 @@ export class TelegramNotificationDaemon {
 		this.scanTimer = undefined;
 	}
 
+	/** Send a single `typing` chat action into a busy session's topic (best-effort). */
+	private async sendTyping(sessionId: string): Promise<void> {
+		const topicId = this.topics.get(sessionId)?.topicId;
+		if (!topicId) return;
+		try {
+			await this.botApi.call("sendChatAction", {
+				chat_id: this.opts.chatId,
+				message_thread_id: Number(topicId),
+				action: "typing",
+			});
+		} catch {
+			// Best-effort: a failed chat action must never stop the daemon.
+		}
+	}
+
+	/** Set a native reaction on an inbound thread message (best-effort). */
+	private async setReaction(messageId: number, emoji: string): Promise<void> {
+		try {
+			await this.botApi.call("setMessageReaction", {
+				chat_id: this.opts.chatId,
+				message_id: messageId,
+				reaction: [{ type: "emoji", emoji }],
+			});
+		} catch {
+			// Best-effort: reactions may be disallowed in the chat; never throw.
+		}
+	}
+
+	private startTypingTimer(): void {
+		if (this.typingTimer) return;
+		const setIntervalImpl = this.opts.setIntervalImpl ?? setInterval;
+		this.typingTimer = setIntervalImpl(() => {
+			if (!this.running || this.busy.size === 0) return;
+			for (const sessionId of this.busy) void this.sendTyping(sessionId);
+		}, TYPING_REFRESH_INTERVAL_MS);
+	}
+
+	private stopTypingTimer(): void {
+		if (!this.typingTimer) return;
+		const clearIntervalImpl = this.opts.clearIntervalImpl ?? clearInterval;
+		clearIntervalImpl(this.typingTimer);
+		this.typingTimer = undefined;
+	}
+
 	async handleSessionMessage(session: SessionSocket, msg: any): Promise<void> {
+		// Live typing indicator: track busy/idle per session and push an immediate
+		// chat action so "typing…" appears without waiting for the refresh tick.
+		if (msg?.type === "activity") {
+			if (msg.state === "busy") {
+				this.busy.add(session.sessionId);
+				await this.sendTyping(session.sessionId);
+			} else {
+				this.busy.delete(session.sessionId);
+			}
+			return;
+		}
+		// Inbound delivery double-check: flip the queued reaction to the consumed
+		// reaction once the session reports a turn picked the message up.
+		if (msg?.type === "inbound_ack" && typeof msg.updateId === "number") {
+			const target = this.inboundReactions.get(msg.updateId);
+			if (target && msg.state === "consumed") {
+				this.inboundReactions.delete(msg.updateId);
+				await this.setReaction(target.messageId, CONSUMED_REACTION);
+			}
+			return;
+		}
 		if (typeof msg?.type === "string" && TelegramNotificationDaemon.THREADED_FRAMES.has(msg.type)) {
 			const send = renderThreadedFrame(msg);
 			if (!send) return;
@@ -867,6 +945,13 @@ export class TelegramNotificationDaemon {
 									},
 						),
 					);
+					// User turns get a native delivery double-check: queued on receipt,
+					// flipped to consumed when the session acks the turn that picks it
+					// up. Config commands are not user turns and get no reaction.
+					if (!cfg && inbound.messageId !== undefined) {
+						this.inboundReactions.set(inbound.updateId, { messageId: inbound.messageId });
+						await this.setReaction(inbound.messageId, QUEUED_REACTION);
+					}
 				}
 				return;
 			}
@@ -947,6 +1032,7 @@ export class TelegramNotificationDaemon {
 		if (!this.running) return;
 		this.startFlushTimer();
 		this.startScanTimer();
+		this.startTypingTimer();
 		try {
 			await this.registerBotCommands();
 			await this.loadAliases();
@@ -976,6 +1062,7 @@ export class TelegramNotificationDaemon {
 		} finally {
 			this.stopFlushTimer();
 			this.stopScanTimer();
+			this.stopTypingTimer();
 			await releaseDaemonOwnership({
 				settings: this.opts.settings,
 				ownerId: this.opts.ownerId,

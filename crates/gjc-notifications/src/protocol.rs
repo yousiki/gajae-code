@@ -170,6 +170,10 @@ pub enum ServerMessage {
 	ConfigUpdate(ConfigUpdate),
 	/// Server capability/version advertisement for negotiation.
 	Hello(ServerHello),
+	/// Live agent-activity signal driving the client typing indicator.
+	Activity(Activity),
+	/// Inbound user-message delivery acknowledgement (native double-check UX).
+	InboundAck(InboundAck),
 	/// Forward-compat: an unrecognized frame type. Tolerated, never emitted.
 	#[serde(other)]
 	Unknown,
@@ -355,6 +359,51 @@ pub struct ConfigCommand {
 	pub redact:     Option<bool>,
 }
 
+/// Agent loop activity state, driving the client's live typing indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityState {
+	/// The agent loop is running (thinking/streaming); show typing.
+	Busy,
+	/// The agent loop has settled, awaiting input; clear typing.
+	Idle,
+}
+
+/// A live agent-activity signal. Emitted on agent loop start/settle so a client
+/// can show/clear a native typing indicator while the agent is thinking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+	/// The session this activity belongs to.
+	pub session_id: String,
+	/// Whether the agent is currently busy or idle.
+	pub state:      ActivityState,
+}
+
+/// Delivery state of a previously-injected inbound user message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboundAckState {
+	/// Received and queued (agent busy / message held as a steer).
+	Queued,
+	/// Consumed by a turn (the agent has picked the message up).
+	Consumed,
+}
+
+/// Acknowledges progress of an inbound [`UserMessage`] (matched by `update_id`)
+/// so the client can reflect a native double-check delivery state on the
+/// originating message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboundAck {
+	/// The session that received the inbound message.
+	pub session_id: String,
+	/// The Telegram update id this acknowledgement refers to.
+	pub update_id:  i64,
+	/// The delivery state now reached.
+	pub state:      InboundAckState,
+}
+
 /// Current protocol version emitted in [`ServerHello`].
 pub const PROTOCOL_VERSION: u32 = 2;
 
@@ -370,6 +419,10 @@ pub mod capabilities {
 	pub const IMAGES: &str = "images";
 	/// Config push/commands.
 	pub const CONFIG: &str = "config";
+	/// Live typing indicator driven by activity signals.
+	pub const TYPING: &str = "typing";
+	/// Inbound user-message delivery acknowledgements (double-check UX).
+	pub const INBOUND_ACK: &str = "inbound_ack";
 }
 
 #[cfg(test)]
@@ -735,5 +788,28 @@ mod tests {
 			serde_json::from_str(r#"{"type":"future_client","payload":1}"#).unwrap();
 		assert_eq!(server, ServerMessage::Unknown);
 		assert_eq!(client, ClientMessage::Unknown);
+	}
+
+	#[test]
+	fn activity_serializes_snake_type_and_state() {
+		let msg = ServerMessage::Activity(Activity {
+			session_id: "sess-1".into(),
+			state:      ActivityState::Busy,
+		});
+		let v = serde_json::to_value(&msg).unwrap();
+		assert_eq!(v["type"], "activity");
+		assert_eq!(v["sessionId"], "sess-1");
+		assert_eq!(v["state"], "busy");
+	}
+
+	#[test]
+	fn inbound_ack_roundtrips_consumed() {
+		let raw = r#"{"type":"inbound_ack","sessionId":"sess-1","updateId":42,"state":"consumed"}"#;
+		let ServerMessage::InboundAck(ack) = serde_json::from_str(raw).unwrap() else {
+			panic!("expected inbound_ack")
+		};
+		assert_eq!(ack.session_id, "sess-1");
+		assert_eq!(ack.update_id, 42);
+		assert_eq!(ack.state, InboundAckState::Consumed);
 	}
 }

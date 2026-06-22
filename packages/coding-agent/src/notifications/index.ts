@@ -138,6 +138,10 @@ interface SessionRuntime {
 	disposeAnswerSource: () => void;
 	redact: boolean;
 	sessionTag: string;
+	/** Whether the agent loop is currently running (drives the typing indicator). */
+	busy: boolean;
+	/** Inbound Telegram update ids injected but not yet consumed by a turn. */
+	pendingInbound: Set<number>;
 }
 
 interface ResolvedSettings {
@@ -311,8 +315,12 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 			if (inbound.kind === "user_message" && inbound.text) {
 				// Inject as a user turn (steers/continues the agent; the resulting
 				// turn streams back via the turn_end handler even when not idle).
+				// Record the update id so it can be acked as "consumed" on the next
+				// turn_start, and steer (vs start a fresh turn) when already busy.
+				const rt = runtimes.get(id);
+				if (rt && typeof inbound.updateId === "number") rt.pendingInbound.add(inbound.updateId);
 				try {
-					api.sendUserMessage(inbound.text);
+					api.sendUserMessage(inbound.text, rt?.busy ? { deliverAs: "steer" } : undefined);
 				} catch (e) {
 					logger.warn(`notifications: sendUserMessage failed: ${String(e)}`);
 				}
@@ -367,6 +375,8 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 				disposeAnswerSource,
 				redact,
 				sessionTag: tag,
+				busy: false,
+				pendingInbound: new Set<number>(),
 			});
 			logger.info(`notifications: serving session ${id} at ${endpoint.url} (unattended=${unattended})`);
 
@@ -497,6 +507,38 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		await startSession(ctx);
 	});
 
+	// Drive the live typing indicator: mark busy when the agent loop starts so
+	// the daemon shows "typing…" in the thread while the agent is thinking,
+	// before any turn output exists. Cleared on `agent_end` below.
+	api.on("agent_start", (_event, ctx) => {
+		const id = sessionId(ctx);
+		const rt = runtimes.get(id);
+		if (!rt) return;
+		rt.busy = true;
+		try {
+			rt.server.pushFrame(JSON.stringify({ type: "activity", sessionId: id, state: "busy" }));
+		} catch (e) {
+			logger.warn(`notifications: activity (busy) failed: ${String(e)}`);
+		}
+	});
+
+	// Each turn that starts has absorbed any messages injected from the thread,
+	// so ack them as "consumed": the daemon flips the queued reaction on the
+	// originating Telegram message to the consumed (double-check) reaction.
+	api.on("turn_start", (_event, ctx) => {
+		const id = sessionId(ctx);
+		const rt = runtimes.get(id);
+		if (!rt || rt.pendingInbound.size === 0) return;
+		for (const updateId of rt.pendingInbound) {
+			try {
+				rt.server.pushFrame(JSON.stringify({ type: "inbound_ack", sessionId: id, updateId, state: "consumed" }));
+			} catch (e) {
+				logger.warn(`notifications: inbound_ack failed: ${String(e)}`);
+			}
+		}
+		rt.pendingInbound.clear();
+	});
+
 	// Idle fires on `agent_end` (the agent loop settling to await the user), NOT
 	// per `turn_end`. turn_end fires once per turn iteration, so a single
 	// user-visible idle previously produced many idle pings (the flood); agent_end
@@ -506,6 +548,13 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		const rt = runtimes.get(id);
 		if (!rt) return;
 		const seq = rt.idleSeq++;
+		// Clear the typing indicator: the agent loop has settled.
+		rt.busy = false;
+		try {
+			rt.server.pushFrame(JSON.stringify({ type: "activity", sessionId: id, state: "idle" }));
+		} catch (e) {
+			logger.warn(`notifications: activity (idle) failed: ${String(e)}`);
+		}
 		// Re-assert the identity header so the daemon renames the topic once the
 		// session title has been auto-generated ("{repo}/{branch} - {title}"). The
 		// daemon only renames when the title actually changed.
