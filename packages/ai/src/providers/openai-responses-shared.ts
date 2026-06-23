@@ -448,11 +448,19 @@ export async function processResponsesStream<TApi extends Api>(
 		? new AnthropicXmlToolCallHealer()
 		: undefined;
 	const emitXmlHealedToolCall = (call: { id: string; name: string; arguments: string }): void => {
+		const args = parseStreamingJson(call.arguments);
+		// If the relay already surfaced this exact call as a structured
+		// function_call (same name + arguments), don't synthesize a duplicate.
+		const argsKey = JSON.stringify(args);
+		const duplicate = output.content.some(
+			b => b.type === "toolCall" && b.name === call.name && JSON.stringify(b.arguments) === argsKey,
+		);
+		if (duplicate) return;
 		const block: ToolCall = {
 			type: "toolCall",
 			id: call.id,
 			name: call.name,
-			arguments: parseStreamingJson(call.arguments),
+			arguments: args,
 		};
 		output.content.push(block);
 		const contentIndex = output.content.length - 1;

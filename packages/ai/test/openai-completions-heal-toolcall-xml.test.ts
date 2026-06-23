@@ -10,12 +10,22 @@ afterEach(() => {
 	global.fetch = originalFetch;
 });
 
+interface ToolCallDelta {
+	index: number;
+	id?: string;
+	type?: "function";
+	function?: { name?: string; arguments?: string };
+}
 interface SseChunk {
 	id: string;
 	object: "chat.completion.chunk";
 	created: number;
 	model: string;
-	choices: Array<{ index: number; delta: { content?: string }; finish_reason?: "stop" | "length" | null }>;
+	choices: Array<{
+		index: number;
+		delta: { content?: string; tool_calls?: ToolCallDelta[] };
+		finish_reason?: "stop" | "length" | "tool_calls" | null;
+	}>;
 }
 
 function sseResponse(events: ReadonlyArray<SseChunk | "[DONE]">): Response {
@@ -97,5 +107,45 @@ describe("chat-completions: leaked Anthropic tool-call XML healing", () => {
 		const tools = result.content.filter((b): b is ToolCall => b.type === "toolCall");
 		expect(tools).toHaveLength(1);
 		expect(tools[0].arguments).toEqual({ _i: "why", questions: [{ id: "r3" }] });
+	});
+
+	it("does not double-dispatch when the same chunk also carries structured tool_calls", async () => {
+		// A relay leaks the XML AND emits the structured call in one delta. The
+		// healer must strip the marker text but not synthesize a second call.
+		const dupChunk: SseChunk = {
+			id: "chatcmpl-xml-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "claude-opus-4-8",
+			choices: [
+				{
+					index: 0,
+					delta: {
+						content: FULL,
+						tool_calls: [
+							{
+								index: 0,
+								id: "call_structured",
+								type: "function",
+								function: { name: "proxy_ask", arguments: '{"_i":"why"}' },
+							},
+						],
+					},
+					finish_reason: null,
+				},
+			],
+		};
+		global.fetch = mockFetch([dupChunk, chunk(undefined, "tool_calls"), "[DONE]"]);
+
+		const result = await streamOpenAICompletions(model(), context(), { apiKey: "test" }).result();
+		const tools = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(tools).toHaveLength(1);
+		expect(tools[0].id).toBe("call_structured");
+
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => (b as { text: string }).text)
+			.join("");
+		expect(text).not.toContain("<invoke");
 	});
 });

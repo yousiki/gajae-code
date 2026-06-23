@@ -802,9 +802,19 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								flushHealedToolCalls();
 							}
 						} else if (xmlHealer) {
-							const clean = xmlHealer.feed(normalizedDeltaText);
-							if (clean.length > 0) appendTextDelta(clean);
-							flushXmlHealedToolCalls();
+							const hasStructuredToolCalls =
+								Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+							if (hasStructuredToolCalls) {
+								// Same chunk leaks XML AND carries structured tool_calls.
+								// Strip the marker text but drop any synthesized calls so
+								// the structured payload stays the single source of truth.
+								const clean = xmlHealer.consumeWithoutCalls(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+							} else {
+								const clean = xmlHealer.feed(normalizedDeltaText);
+								if (clean.length > 0) appendTextDelta(clean);
+								flushXmlHealedToolCalls();
+							}
 						} else {
 							appendTextDelta(normalizedDeltaText);
 						}

@@ -34,21 +34,26 @@ import { generateHealedToolCallId, type HealedToolCall } from "./tool-call-heali
 /** Longest partial tag we hold back waiting for more bytes before giving up. */
 const MAX_PARTIAL_HOLD = 1024;
 
-/** Literal tag stems we may be in the middle of receiving (no attrs / close yet). */
-const TAG_STEMS = [
-	"<function_calls",
-	"</function_calls",
-	"<function_calls",
-	"</function_calls",
-	"<invoke",
-	"</invoke",
-	"<invoke",
-	"</invoke",
-	"<parameter",
-	"</parameter",
-	"<parameter",
-	"</parameter",
-] as const;
+/**
+ * XML namespace prefix some harness encodings use. Built by concatenation so the
+ * `<`-followed-by-prefix adjacency is never written as a source literal (which
+ * upstream tooling has been observed to strip), and so the plain and namespaced
+ * stems are always generated as a matched pair.
+ */
+const NS = "ant" + "ml" + ":";
+const TAG_NAMES = ["function_calls", "invoke", "parameter"] as const;
+
+/**
+ * Literal tag stems we may be in the middle of receiving (no attrs / close yet).
+ * Includes both plain and `antml:`-namespaced open/close stems for every tag so
+ * streaming partial-tag holdback engages for either spelling.
+ */
+const TAG_STEMS: readonly string[] = TAG_NAMES.flatMap(name => [
+	`<${name}`,
+	`</${name}`,
+	`<${NS}${name}`,
+	`</${NS}${name}`,
+]);
 
 const RE_FUNCTION_CALLS_OPEN = /^<(?:antml:)?function_calls\s*>/;
 const RE_FUNCTION_CALLS_CLOSE = /^<\/(?:antml:)?function_calls\s*>/;
@@ -56,7 +61,7 @@ const RE_INVOKE_OPEN = /^<(?:antml:)?invoke\s+name\s*=\s*"([^"]*)"\s*>/;
 const RE_INVOKE_CLOSE = /^<\/(?:antml:)?invoke\s*>/;
 const RE_PARAMETER_OPEN = /^<(?:antml:)?parameter\s+name\s*=\s*"([^"]*)"\s*>/;
 const RE_PARAMETER_CLOSE = /^<\/(?:antml:)?parameter\s*>/;
-const RE_PARAMETER_CLOSE_STEMS = ["</parameter", "</parameter"] as const;
+const RE_PARAMETER_CLOSE_STEMS: readonly string[] = [`</parameter`, `</${NS}parameter`];
 
 type TagMatch =
 	| { kind: "functionCallsOpen" | "functionCallsClose" | "invokeClose" | "parameterClose"; length: number }
@@ -107,6 +112,19 @@ export class AnthropicXmlToolCallHealer {
 		this.#compact();
 		this.#buffer += text;
 		return this.#consume();
+	}
+
+	/**
+	 * Like {@link feed}, but discards any tool calls the chunk completes. Used
+	 * when the upstream provider also emits structured tool calls for the same
+	 * chunk: the healer still strips the leaked marker text from visible output,
+	 * but the structured payload stays the single source of truth (avoids
+	 * double-dispatching the same call).
+	 */
+	consumeWithoutCalls(text: string): string {
+		const clean = this.feed(text);
+		if (this.#completed.length > 0) this.#completed.length = 0;
+		return clean;
 	}
 
 	/** Drain accumulated tool calls. The internal list is cleared. */
