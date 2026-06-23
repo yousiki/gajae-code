@@ -17,6 +17,7 @@ import {
 	type AssistantMessage,
 	type ImageContent,
 	type Model,
+	type OpenAICompat,
 	resolveServiceTier,
 	type ServiceTier,
 	type StopReason,
@@ -29,6 +30,10 @@ import {
 	type ToolResultMessage,
 } from "../types";
 import { normalizeResponsesToolCallId } from "../utils";
+import {
+	AnthropicXmlToolCallHealer,
+	modelMayLeakAnthropicXmlToolCalls,
+} from "../utils/anthropic-xml-tool-call-healing";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
@@ -432,6 +437,30 @@ export async function processResponsesStream<TApi extends Api>(
 	};
 	let sawFirstToken = false;
 
+	// Claude served through OpenAI-compatible relays may leak Anthropic tool-call
+	// XML (`<invoke name="…"><parameter …>`) into `output_text` rather than
+	// emitting structured function calls. Heal it so UI-bound tools still fire.
+	const xmlHealer = modelMayLeakAnthropicXmlToolCalls({
+		provider: model.provider,
+		modelId: model.id,
+		healToolCallXml: (model.compat as OpenAICompat | undefined)?.healToolCallXml,
+	})
+		? new AnthropicXmlToolCallHealer()
+		: undefined;
+	const emitXmlHealedToolCall = (call: { id: string; name: string; arguments: string }): void => {
+		const block: ToolCall = {
+			type: "toolCall",
+			id: call.id,
+			name: call.name,
+			arguments: parseStreamingJson(call.arguments),
+		};
+		output.content.push(block);
+		const contentIndex = output.content.length - 1;
+		stream.push({ type: "toolcall_start", contentIndex, partial: output });
+		stream.push({ type: "toolcall_delta", contentIndex, delta: call.arguments, partial: output });
+		stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+	};
+
 	for await (const event of openaiStream) {
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
@@ -542,14 +571,20 @@ export async function processResponsesStream<TApi extends Api>(
 			if (entry?.item.type === "message" && entry.block.type === "text") {
 				const lastPart = entry.item.content?.[entry.item.content.length - 1];
 				if (lastPart?.type === "output_text") {
-					entry.block.text += event.delta;
-					lastPart.text += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: entry.blockContentIndex,
-						delta: event.delta,
-						partial: output,
-					});
+					const visible = xmlHealer ? xmlHealer.feed(event.delta) : event.delta;
+					if (visible.length > 0) {
+						entry.block.text += visible;
+						lastPart.text += visible;
+						stream.push({
+							type: "text_delta",
+							contentIndex: entry.blockContentIndex,
+							delta: visible,
+							partial: output,
+						});
+					}
+					if (xmlHealer) {
+						for (const call of xmlHealer.drainCompleted()) emitXmlHealedToolCall(call);
+					}
 				}
 			}
 		} else if (event.type === "response.refusal.delta") {
@@ -635,9 +670,27 @@ export async function processResponsesStream<TApi extends Api>(
 				dropEntry(item.id, event.output_index);
 			} else if (item.type === "message" && entry?.block.type === "text") {
 				const block = entry.block;
-				block.text = item.content
-					.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
-					.join("");
+				if (xmlHealer) {
+					// The wire item carries the raw text including any leaked tool-call
+					// XML; overwriting from it would undo the streamed healing. Keep the
+					// healed accumulation, flush any held-back trailing prose, and emit
+					// tool calls completed right at the item boundary.
+					const trailing = xmlHealer.flushPending();
+					if (trailing.length > 0) {
+						block.text += trailing;
+						stream.push({
+							type: "text_delta",
+							contentIndex: entry.blockContentIndex,
+							delta: trailing,
+							partial: output,
+						});
+					}
+					for (const call of xmlHealer.drainCompleted()) emitXmlHealedToolCall(call);
+				} else {
+					block.text = item.content
+						.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
+						.join("");
+				}
 				block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
 				stream.push({
 					type: "text_end",
@@ -709,6 +762,9 @@ export async function processResponsesStream<TApi extends Api>(
 							? `status_details: ${statusDetailsReason}`
 							: "Unknown error (no error details in response)";
 				throw new Error(message);
+			}
+			if (xmlHealer) {
+				for (const call of xmlHealer.drainCompleted()) emitXmlHealedToolCall(call);
 			}
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";

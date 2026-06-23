@@ -6,7 +6,12 @@ type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mix
 export type ResolvedOpenAICompat = Required<
 	Omit<
 		OpenAICompat,
-		"openRouterRouting" | "vercelGatewayRouting" | "extraBody" | "toolStrictMode" | "toolChoiceSupport"
+		| "openRouterRouting"
+		| "vercelGatewayRouting"
+		| "extraBody"
+		| "toolStrictMode"
+		| "toolChoiceSupport"
+		| "healToolCallXml"
 	>
 > & {
 	openRouterRouting?: OpenAICompat["openRouterRouting"];
@@ -15,6 +20,8 @@ export type ResolvedOpenAICompat = Required<
 	toolStrictMode: ResolvedToolStrictMode;
 	/** Optional explicit capability override; resolved via deriveToolChoiceSupport. */
 	toolChoiceSupport?: OpenAICompat["toolChoiceSupport"];
+	/** Relay opt-in to heal leaked Anthropic tool-call XML; read directly from model.compat, not auto-detected. */
+	healToolCallXml?: OpenAICompat["healToolCallXml"];
 };
 
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {

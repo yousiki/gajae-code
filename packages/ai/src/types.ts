@@ -822,6 +822,16 @@ export interface OpenAICompat extends ToolChoiceCompat {
 	supportsStrictMode?: boolean;
 	/** Whether tool schemas must be sent either all strict or all non-strict. Undefined keeps the existing per-tool mixed behavior. */
 	toolStrictMode?: "all_strict" | "none";
+	/**
+	 * Whether to recover Anthropic-style tool-call XML (`<function_calls>` /
+	 * `<invoke name="…"><parameter name="…">…`) that leaks into visible assistant
+	 * text and reconstruct it into structured tool calls. Set this for relays
+	 * (e.g. LiteLLM/OpenAI-compatible proxies fronting Claude) that forward the
+	 * raw model text instead of converting it into `tool_calls`, which otherwise
+	 * makes UI-bound tools silently fail to render. Default: auto-detected for
+	 * claude-family model ids; explicitly set to force on/off.
+	 */
+	healToolCallXml?: boolean;
 }
 
 /**

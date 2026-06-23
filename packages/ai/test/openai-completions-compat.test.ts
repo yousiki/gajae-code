@@ -95,6 +95,7 @@ describe("openai-completions compatibility", () => {
 			extraBody: {},
 			supportsStrictMode: true,
 			toolStrictMode: "none",
+			healToolCallXml: false,
 		} satisfies Required<OpenAICompat>;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
