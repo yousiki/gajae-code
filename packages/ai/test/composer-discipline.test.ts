@@ -39,6 +39,7 @@ const compat: Required<OpenAICompat> = {
 	extraBody: {},
 	supportsStrictMode: true,
 	toolStrictMode: "none",
+	healToolCallXml: false,
 };
 
 function createXaiModel(id: string): Model<"openai-completions"> {

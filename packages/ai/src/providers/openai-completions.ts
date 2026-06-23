@@ -37,6 +37,10 @@ import {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import {
+	AnthropicXmlToolCallHealer,
+	modelMayLeakAnthropicXmlToolCalls,
+} from "../utils/anthropic-xml-tool-call-healing";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toFirepassWireModelId, toFireworksWireModelId } from "../utils/fireworks-model-id";
 import {
@@ -719,6 +723,23 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
+			// Claude served through OpenAI-compatible relays may leak Anthropic
+			// tool-call XML (`<invoke name="…"><parameter …>`) into visible text
+			// rather than emitting structured `tool_calls`. Reconstruct it so
+			// UI-bound tools (e.g. the deep-interview question panel) still fire.
+			const xmlHealer = modelMayLeakAnthropicXmlToolCalls({
+				provider: model.provider,
+				modelId: model.id,
+				healToolCallXml: model.compat?.healToolCallXml,
+			})
+				? new AnthropicXmlToolCallHealer()
+				: undefined;
+			const flushXmlHealedToolCalls = (): void => {
+				if (!xmlHealer) return;
+				const calls = xmlHealer.drainCompleted();
+				for (const call of calls) emitHealedToolCall(call);
+			};
+
 			for await (const chunk of iterateWithIdleTimeout(openaiStream, {
 				watchdog: firstEventWatchdog,
 				idleTimeoutMs,
@@ -780,6 +801,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								if (clean.length > 0) appendTextDelta(clean);
 								flushHealedToolCalls();
 							}
+						} else if (xmlHealer) {
+							const clean = xmlHealer.feed(normalizedDeltaText);
+							if (clean.length > 0) appendTextDelta(clean);
+							flushXmlHealedToolCalls();
 						} else {
 							appendTextDelta(normalizedDeltaText);
 						}
@@ -897,6 +922,18 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				const partial = (currentBlock as { partialArgs?: string }).partialArgs;
 				if (partial !== undefined && !isCompleteJson(partial)) {
 					currentBlock.incompleteArguments = true;
+				}
+			}
+
+			if (xmlHealer) {
+				const trailing = xmlHealer.flushPending();
+				if (trailing.length > 0) appendTextDelta(trailing);
+				flushXmlHealedToolCalls();
+				if (healedToolCallEmitted && output.stopReason === "stop") {
+					// Relays that leak Claude tool-call XML typically still report
+					// `finish_reason: stop`. Promote only that natural-completion
+					// finish so the agent loop dispatches the reconstructed call.
+					output.stopReason = "toolUse";
 				}
 			}
 

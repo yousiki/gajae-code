@@ -47,6 +47,7 @@ const compat: Required<OpenAICompat> = {
 	extraBody: {},
 	supportsStrictMode: true,
 	toolStrictMode: "none",
+	healToolCallXml: false,
 };
 
 function makeModel<TApi extends Api>(api: TApi, provider: Model["provider"]): Model<TApi> {

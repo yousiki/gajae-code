@@ -266,6 +266,6 @@ function normalizeFunctionName(rawId: string): string {
 	return colon >= 0 ? stripped.slice(0, colon) : stripped;
 }
 
-function generateHealedToolCallId(): string {
+export function generateHealedToolCallId(): string {
 	return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
