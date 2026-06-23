@@ -57,18 +57,49 @@ describe("AnthropicXmlToolCallHealer", () => {
 		expect(JSON.parse(calls[0].arguments)).toEqual({ x: 1 });
 	});
 
-	it("tolerates the antml: namespace prefix", () => {
-		const ns =
-			"<function_calls>" +
-			'<invoke name="ask">' +
-			'<parameter name="p">"v"</parameter>' +
-			"</invoke>" +
-			"</function_calls>";
-		const { text, calls } = healOnce(ns);
+	// The namespace prefix is assembled by concatenation so the `<`-prefix
+	// adjacency is never written as a source literal (which upstream tooling can
+	// strip — the exact bug that made the earlier version of this test pass
+	// against plain, un-namespaced XML).
+	const NS = `ant${"ml:"}`;
+	const NS_BLOCK =
+		`<${NS}function_calls>` +
+		`<${NS}invoke name="ask">` +
+		`<${NS}parameter name="p">"v"</${NS}parameter>` +
+		`</${NS}invoke>` +
+		`</${NS}function_calls>`;
+
+	it("tolerates the antml: namespace prefix (single chunk)", () => {
+		expect(NS_BLOCK).toContain(`<${NS}invoke`); // guard: prefix really is present
+		const { text, calls } = healOnce(NS_BLOCK);
 		expect(text).toBe("");
 		expect(calls).toHaveLength(1);
 		expect(calls[0].name).toBe("ask");
 		expect(JSON.parse(calls[0].arguments)).toEqual({ p: "v" });
+	});
+
+	it("tolerates the antml: namespace prefix (char-by-char, no leak)", () => {
+		const { text, calls } = healByChar(`run: ${NS_BLOCK} ok`);
+		// The whole namespaced block must be stripped — not even a `<` may leak.
+		expect(text.replace(/\s+/g, " ").trim()).toBe("run: ok");
+		expect(text).not.toContain("<");
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe("ask");
+		expect(JSON.parse(calls[0].arguments)).toEqual({ p: "v" });
+	});
+
+	it("heals a namespaced block split mid-tag across two chunks", () => {
+		const healer = new AnthropicXmlToolCallHealer();
+		// Split right after `<inv` to force partial-tag holdback on a
+		// namespaced open tag.
+		const cut = NS_BLOCK.indexOf("invoke") + 3;
+		let text = healer.feed(NS_BLOCK.slice(0, cut));
+		text += healer.feed(NS_BLOCK.slice(cut));
+		text += healer.flushPending();
+		const calls = healer.drainCompleted();
+		expect(text).toBe("");
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe("ask");
 	});
 
 	it("reconstructs a block split across every character boundary", () => {
