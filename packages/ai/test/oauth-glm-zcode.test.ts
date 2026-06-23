@@ -5,7 +5,11 @@ import * as path from "node:path";
 
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 import { getBundledModel } from "../src/models";
-import { buildAnthropicClientOptions, buildAnthropicHeaders } from "../src/providers/anthropic";
+import {
+	buildAnthropicClientOptions,
+	buildAnthropicHeaders,
+	buildZCodeSourceHeaders,
+} from "../src/providers/anthropic";
 import { isOAuthToken } from "../src/utils/anthropic-auth";
 import { getOAuthProviders, refreshOAuthToken } from "../src/utils/oauth";
 import {
@@ -286,5 +290,49 @@ describe("GLM ZCode OAuth login provider", () => {
 		expect(headers.Authorization).toBe(`Bearer ${MINTED_KEY}`);
 		expect(headers["X-Api-Key"]).toBeUndefined();
 		expect((headers["User-Agent"] ?? "").toLowerCase().startsWith("claude-cli")).toBe(false);
+	});
+
+	it("attaches ZCode client source headers so api.z.ai recognizes the ZCode client", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: MINTED_KEY,
+			baseUrl: GLM_ZCODE_ANTHROPIC_BASE_URL,
+			zcodeSourceHeaders: true,
+		});
+		expect(headers["User-Agent"]).toBe("ZCode/3.1.2");
+		expect(headers["X-Title"]).toBe("Z Code@electron");
+		expect(headers["HTTP-Referer"]).toBe("https://zcode.z.ai");
+		expect(headers["X-ZCode-Agent"]).toBe("glm");
+		expect(headers["X-ZCode-App-Version"]).toBe("3.1.2");
+		expect(headers["X-Release-Channel"]).toBe("production");
+		expect(headers["X-Platform"]).toBe(`${process.platform}-${process.arch}`);
+		expect(headers["X-Os-Category"]).toMatch(/^(macos|windows|linux)$/);
+		expect(headers["X-Client-Language"]).toBeDefined();
+		expect(headers["X-Client-Timezone"]).toBeDefined();
+		// still a bearer API-key request, never x-api-key or claude-cli
+		expect(headers.Authorization).toBe(`Bearer ${MINTED_KEY}`);
+		expect(headers["X-Api-Key"]).toBeUndefined();
+	});
+
+	it("emits printable-only ZCode source headers from buildZCodeSourceHeaders()", () => {
+		const headers = buildZCodeSourceHeaders();
+		for (const value of Object.values(headers)) {
+			expect(value).toMatch(/^[\x20-\x7e]+$/);
+		}
+		expect(headers["X-ZCode-Agent"]).toBe("glm");
+	});
+
+	it("includes the ZCode source headers in glm-zcode client default headers", () => {
+		const model = getBundledModel("glm-zcode", "glm-5.2") as Parameters<
+			typeof buildAnthropicClientOptions
+		>[0]["model"];
+		const resolved = buildAnthropicClientOptions({ model, apiKey: MINTED_KEY });
+		expect(resolved.defaultHeaders?.["User-Agent"]).toBe("ZCode/3.1.2");
+		expect(resolved.defaultHeaders?.["X-ZCode-Agent"]).toBe("glm");
+	});
+
+	it("does NOT attach ZCode source headers when the flag is off (e.g. legacy zai)", () => {
+		const headers = buildAnthropicHeaders({ apiKey: MINTED_KEY, baseUrl: "https://api.z.ai/api/anthropic" });
+		expect(headers["X-ZCode-Agent"]).toBeUndefined();
+		expect(headers["User-Agent"] ?? "").not.toBe("ZCode/3.1.2");
 	});
 });
