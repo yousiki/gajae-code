@@ -1081,8 +1081,8 @@ export class TelegramNotificationDaemon {
 			await reply("Session lifecycle control is not available right now.");
 			return true;
 		}
-		if (updateId !== undefined && this.seenUpdateIds.has(updateId)) return true;
-		if (updateId !== undefined) this.seenUpdateIds.add(updateId);
+		if (updateId !== undefined && this.dispatchState.seenUpdateIds.has(updateId)) return true;
+		if (updateId !== undefined) this.dispatchState.seenUpdateIds.add(updateId);
 
 		const parsed = parseLifecycleCommand(text);
 		if (parsed.kind === "none") return false;
