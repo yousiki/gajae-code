@@ -1498,8 +1498,10 @@ function isAllowedCliReplayCommand(command: readonly string[]): boolean {
 	if (executable === "gjc") return args.length === 1 && ["read", "status"].includes(args[0] ?? "");
 	return false;
 }
-function formatCliReplayCommand(command: readonly string[]): string {
-	return JSON.stringify(command);
+function summarizeBlockedCliReplayCommand(command: readonly string[]): string {
+	const executable = command[0] ? basenameCommand(command[0]) : "<missing>";
+	const argCount = Math.max(0, command.length - 1);
+	return `${JSON.stringify(executable)} with ${argCount} arg${argCount === 1 ? "" : "s"}`;
 }
 
 function cliReplayAllowlistDescription(): string {
@@ -1600,7 +1602,7 @@ function parseCliReplayRecord(
 		throw new Error(`qualityGate ${fieldName}.replaySafe must be true before CLI replay executes`);
 	if (!isAllowedCliReplayCommand(command)) {
 		throw new Error(
-			`qualityGate ${fieldName}.command is not in the conservative CLI replay allowlist; command ${formatCliReplayCommand(command)} is blocked. Allowed replay commands: ${cliReplayAllowlistDescription()}. For other commands, provide audited replayExempt metadata with reasonCode, reason, approvedBy, and fallbackArtifactRefs that point to a structurally valid fallback artifact.`,
+			`qualityGate ${fieldName}.command is not in the conservative CLI replay allowlist; command ${summarizeBlockedCliReplayCommand(command)} is blocked. Allowed replay commands: ${cliReplayAllowlistDescription()}. For other commands, provide audited replayExempt metadata with reasonCode, reason, approvedBy, and fallbackArtifactRefs that point to a structurally valid fallback artifact.`,
 		);
 	}
 	if (record.normalization !== undefined && record.normalization !== "default") {

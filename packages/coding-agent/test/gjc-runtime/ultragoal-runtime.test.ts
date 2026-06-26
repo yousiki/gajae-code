@@ -579,7 +579,8 @@ describe("ultragoal CLI replay validation", () => {
 			cliExecutorQa([cliReplayArtifact({ command: ["bun", "install"] })]),
 		);
 		expect(unallowlistedError).toContain("allowlist");
-		expect(unallowlistedError).toContain('command ["bun","install"] is blocked');
+		expect(unallowlistedError).toContain('command "bun" with 1 arg is blocked');
+		expect(unallowlistedError).not.toContain("install");
 		expect(unallowlistedError).toContain("Allowed replay commands");
 		expect(unallowlistedError).toContain("replayExempt metadata");
 	});
@@ -604,7 +605,8 @@ describe("ultragoal CLI replay validation", () => {
 			]),
 		);
 		expect(gitError).toContain("allowlist");
-		expect(gitError).toContain('command ["git","diff","--output=artifact.txt"] is blocked');
+		expect(gitError).toContain('command "git" with 2 args is blocked');
+		expect(gitError).not.toContain("--output=artifact.txt");
 	});
 
 	it("rejects path-qualified or case-spoofed replay executables", async () => {
