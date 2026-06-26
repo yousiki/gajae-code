@@ -899,9 +899,18 @@ function categorizeComputerChangePath(value: string): UltragoalChangeCategory {
 }
 
 function isComputerControlSurfaceCategory(category: UltragoalChangeCategory): boolean {
-	return (
-		category === "code" || category === "generated-binding" || category === "tool" || category === "settings-registry"
-	);
+	// The computer-use red-team suite is conditional, not universal (see the
+	// ultragoal SKILL): require it only when the change actually touches
+	// computer-control source — the computer tool (`tool`), its settings/registry
+	// wiring (`settings-registry`), or computer Rust (`code`). A bare regeneration
+	// of the SHARED native binding (`generated-binding`: packages/natives/native/
+	// index.{d.ts,js}) is NOT by itself a computer-use change: that file is
+	// generated from Rust, so any real computer-use behavior change must also
+	// touch one of the categories above and will still trigger the suite. Treating
+	// the regenerated aggregate binding as a computer surface forced the suite on
+	// unrelated features (e.g. notifications), which the SKILL explicitly warns
+	// against, so it is excluded here.
+	return category === "code" || category === "tool" || category === "settings-registry";
 }
 
 function isComputerControlSurfaceChangePath(row: UltragoalChangeSetPath): boolean {

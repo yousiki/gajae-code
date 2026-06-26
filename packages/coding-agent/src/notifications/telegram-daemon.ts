@@ -1,4 +1,5 @@
 import { spawn as childProcessSpawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logger } from "@gajae-code/utils";
@@ -9,7 +10,30 @@ import { resolveGjcRuntimeSpawnInfo } from "../daemon/runtime";
 import { getNotificationConfig, isGloballyConfigured, tokenFingerprint } from "./config";
 import { parseInThreadConfigCommand } from "./config-commands";
 import { buildButtonGrid, TELEGRAM_PARSE_MODE } from "./html-format";
+import type {
+	SessionCloseTarget,
+	SessionCreateTarget,
+	SessionLifecycleRequest,
+	SessionLifecycleResponse,
+	SessionResumeTarget,
+} from "./index";
+import {
+	formatLifecycleOutcome,
+	isLifecycleCommandText,
+	lifecycleUsage,
+	parseLifecycleCommand,
+	validateLifecycleTarget,
+} from "./lifecycle-commands";
+import {
+	attachLifecycleControl,
+	buildOrchestratorDeps,
+	type ControlServerLike,
+	createNativeControlServer,
+	type LifecycleControlServer,
+	type LifecycleControlServerFactory,
+} from "./lifecycle-control-runtime";
 import { RateLimitPool } from "./rate-limit-pool";
+import { listRecentSessions } from "./recent-activity";
 import {
 	type AliasTable,
 	buildActionMessage,
@@ -167,6 +191,30 @@ export function daemonPaths(agentDir: string): DaemonPaths {
 		steal: path.join(dir, "telegram-daemon.steal"),
 		aliases: path.join(dir, "telegram-callback-aliases.json"),
 	};
+}
+
+/**
+ * Attach session-lifecycle control (create/close/resume) to the running daemon.
+ *
+ * Wires an already-started, authenticated control server to the lifecycle
+ * orchestrator with real daemon-side effects (tmux launcher / force-close /
+ * resume), a durable fsynced idempotency ledger + audit JSONL under the agent
+ * notifications dir, and strict paired-chat gating. The control server itself
+ * (NotificationControlServer) is owned/started by the daemon process; this
+ * function only connects it to policy. Returns the orchestrator deps for tests.
+ */
+export function startDaemonLifecycleControl(input: {
+	controlServer: ControlServerLike;
+	pairedChatId: string;
+	agentDir: string;
+	env?: NodeJS.ProcessEnv;
+}): void {
+	const deps = buildOrchestratorDeps({
+		pairedChatId: input.pairedChatId,
+		agentNotificationsDir: daemonPaths(input.agentDir).dir,
+		env: input.env,
+	});
+	attachLifecycleControl(input.controlServer, deps);
 }
 
 async function ensureDir(fsImpl: TelegramDaemonFs, dir: string): Promise<void> {
@@ -556,6 +604,13 @@ export interface TelegramDaemonOptions {
 	pid?: number;
 	botApi?: BotApi;
 	control?: DaemonControlHooks;
+	/**
+	 * Factory for the session-lifecycle control server. Defaults to the real
+	 * native NotificationControlServer; tests inject a fake to verify the
+	 * owner-bound start/stop lifecycle without a socket. When `undefined` AND no
+	 * default applies (e.g. lifecycle control disabled), no control server starts.
+	 */
+	createLifecycleControlServer?: LifecycleControlServerFactory | null;
 }
 
 interface SessionSocket {
@@ -598,6 +653,25 @@ export class TelegramNotificationDaemon {
 	private stopRequested = false;
 	/** Current bounded backoff after a Telegram getUpdates 409 conflict (0 when healthy). */
 	private pollConflictBackoffMs = 0;
+	/**
+	 * The owner-bound session-lifecycle control server (create/close/resume).
+	 * Started in {@link run} after ownership is confirmed (so exactly one owner
+	 * ever runs one), stopped in run()'s finally on any exit path.
+	 */
+	private controlServer: LifecycleControlServer | undefined;
+	/** True while lifecycle control is active, so the loop keeps polling at idle. */
+	private lifecycleControlActive = false;
+	/** Control token (in-memory) the loopback client presents; never persisted/logged. */
+	private controlToken: string | undefined;
+	/** Loopback WS client to the daemon's own control endpoint (Option A real wire path). */
+	private controlClient: WebSocket | undefined;
+	/** Pending lifecycle responses awaiting a control-endpoint reply, by requestId. */
+	private readonly pendingLifecycle = new Map<
+		string,
+		{ resolve: (r: SessionLifecycleResponse) => void; timer: ReturnType<typeof setTimeout> }
+	>();
+	/** Monotonic counter for unique lifecycle request ids. */
+	private lifecycleSeq = 0;
 
 	/**
 	 * Cooperatively stop the daemon: set the stop flag and abort the in-flight
@@ -608,6 +682,280 @@ export class TelegramNotificationDaemon {
 		this.stopRequested = true;
 		this.running = false;
 		this.activePoll?.abort();
+	}
+
+	/**
+	 * Start the owner-bound lifecycle control server and wire it to the
+	 * orchestrator. Called from {@link run} ONLY after ownership is confirmed, so
+	 * exactly one owner ever starts exactly one control server (no second poller
+	 * / 409). A control-server failure degrades gracefully: the daemon keeps
+	 * serving notifications without lifecycle control. Returns true when started.
+	 */
+	private async startLifecycleControl(): Promise<boolean> {
+		const factory =
+			this.opts.createLifecycleControlServer === null
+				? undefined
+				: (this.opts.createLifecycleControlServer ?? createNativeControlServer);
+		if (!factory) return false;
+		let server: LifecycleControlServer | undefined;
+		try {
+			// High-entropy, in-memory control token (never persisted raw / logged).
+			const token = crypto.randomBytes(32).toString("base64url");
+			const agentDir = this.opts.settings.getAgentDir();
+			server = factory({ token, ownerId: this.opts.ownerId, agentDir });
+			const deps = buildOrchestratorDeps({
+				pairedChatId: this.opts.chatId,
+				agentNotificationsDir: daemonPaths(agentDir).dir,
+			});
+			// Register the lifecycle-request handler BEFORE start(): the native
+			// control server captures the callback at start time, so wiring must
+			// precede start or forwarded requests never reach the orchestrator.
+			attachLifecycleControl(server, deps);
+			const endpoint = (await server.start()) as { url?: string } | undefined;
+			this.controlServer = server;
+			this.controlToken = token;
+			// Option A: connect a loopback WS client to our own control endpoint so
+			// parsed /session_* commands traverse the real authenticated wire path.
+			// Mark control active ONLY after the client is open, so a first-poll
+			// /session_create never races a still-CONNECTING socket.
+			const opened = endpoint?.url ? await this.connectControlClient(endpoint.url, token) : false;
+			this.lifecycleControlActive = opened;
+			if (!opened) {
+				logger.warn("notifications: lifecycle control client did not open; lifecycle commands disabled");
+			}
+			return opened;
+		} catch (e) {
+			// Never let lifecycle-control startup kill the notifications daemon.
+			// Stop any partially-started server so it cannot leak.
+			try {
+				server?.stop();
+			} catch {
+				// best-effort
+			}
+			logger.warn(`notifications: lifecycle control failed to start: ${String(e)}`);
+			this.controlServer = undefined;
+			this.lifecycleControlActive = false;
+			return false;
+		}
+	}
+
+	/** Stop the lifecycle control server (idempotent); called from run()'s finally. */
+	private stopLifecycleControl(): void {
+		this.lifecycleControlActive = false;
+		this.controlToken = undefined;
+		const client = this.controlClient;
+		this.controlClient = undefined;
+		try {
+			client?.close();
+		} catch {
+			// best-effort
+		}
+		// Reject any in-flight lifecycle requests so callers do not hang.
+		for (const [requestId, pending] of this.pendingLifecycle) {
+			clearTimeout(pending.timer);
+			pending.resolve({
+				type: "session_lifecycle_error",
+				requestId,
+				status: "error",
+				reason: "terminal_uncertain",
+				message: "control server stopped",
+			});
+		}
+		this.pendingLifecycle.clear();
+		const server = this.controlServer;
+		this.controlServer = undefined;
+		try {
+			server?.stop();
+		} catch (e) {
+			logger.warn(`notifications: lifecycle control failed to stop cleanly: ${String(e)}`);
+		}
+	}
+
+	/**
+	 * Connect the loopback control client and resolve responses by requestId.
+	 * Resolves true once the socket is OPEN (bounded), false on error/timeout, so
+	 * the caller only marks lifecycle control active when commands can be sent.
+	 */
+	private connectControlClient(url: string, token: string): Promise<boolean> {
+		return new Promise<boolean>(resolve => {
+			let settled = false;
+			const finish = (ok: boolean) => {
+				if (settled) return;
+				settled = true;
+				resolve(ok);
+			};
+			try {
+				const WsCtor = this.opts.WebSocketImpl ?? WebSocket;
+				const client = new WsCtor(`${url}/?token=${encodeURIComponent(token)}`);
+				this.controlClient = client;
+				const openTimer = (this.opts.setTimeoutImpl ?? setTimeout)(() => finish(false), 5_000);
+				client.addEventListener("open", () => {
+					clearTimeout(openTimer);
+					finish(true);
+				});
+				client.addEventListener("error", () => {
+					clearTimeout(openTimer);
+					finish(false);
+				});
+				client.addEventListener("message", (ev: MessageEvent) => {
+					let msg: SessionLifecycleResponse;
+					try {
+						msg = JSON.parse(String((ev as { data: unknown }).data)) as SessionLifecycleResponse;
+					} catch {
+						return;
+					}
+					const requestId = (msg as { requestId?: string }).requestId;
+					if (!requestId) return;
+					const pending = this.pendingLifecycle.get(requestId);
+					if (!pending) return;
+					clearTimeout(pending.timer);
+					this.pendingLifecycle.delete(requestId);
+					pending.resolve(msg);
+				});
+			} catch (e) {
+				logger.warn(`notifications: lifecycle control client failed to connect: ${String(e)}`);
+				finish(false);
+			}
+		});
+	}
+
+	/** Send a lifecycle frame over the loopback client and await the response. */
+	private submitLifecycleFrame(frame: SessionLifecycleRequest): Promise<SessionLifecycleResponse> {
+		return new Promise<SessionLifecycleResponse>(resolve => {
+			const client = this.controlClient;
+			if (!client || client.readyState !== WebSocket.OPEN) {
+				resolve({
+					type: "session_lifecycle_error",
+					requestId: frame.requestId,
+					status: "error",
+					reason: "terminal_uncertain",
+					message: "lifecycle control unavailable",
+				});
+				return;
+			}
+			const timer = (this.opts.setTimeoutImpl ?? setTimeout)(() => {
+				this.pendingLifecycle.delete(frame.requestId);
+				resolve({
+					type: "session_lifecycle_error",
+					requestId: frame.requestId,
+					status: "error",
+					reason: "readiness_timeout",
+					message: "lifecycle request timed out",
+				});
+			}, 120_000);
+			this.pendingLifecycle.set(frame.requestId, { resolve, timer });
+			try {
+				client.send(JSON.stringify(frame));
+			} catch (e) {
+				clearTimeout(timer);
+				this.pendingLifecycle.delete(frame.requestId);
+				resolve({
+					type: "session_lifecycle_error",
+					requestId: frame.requestId,
+					status: "error",
+					reason: "terminal_uncertain",
+					message: `lifecycle send failed: ${String(e)}`,
+				});
+			}
+		});
+	}
+
+	private nextLifecycleRequestId(): string {
+		return `tg-${this.opts.ownerId}-${(this.lifecycleSeq += 1)}-${crypto.randomBytes(4).toString("hex")}`;
+	}
+
+	/** Build an authenticated lifecycle frame from a parsed command + identity. */
+	private buildLifecycleFrame(
+		parsed:
+			| { kind: "create"; target: SessionCreateTarget }
+			| { kind: "close"; target: SessionCloseTarget }
+			| { kind: "resume"; target: SessionResumeTarget },
+		updateId: number,
+	): SessionLifecycleRequest {
+		const requestId = this.nextLifecycleRequestId();
+		const token = this.controlToken ?? "";
+		const chatId = this.opts.chatId;
+		if (parsed.kind === "create") {
+			return {
+				type: "session_create",
+				requestId,
+				lifecycleRequestId: requestId,
+				intendedSessionId: `s${crypto.randomBytes(6).toString("hex")}`,
+				updateId,
+				chatId,
+				token,
+				target: parsed.target,
+			};
+		}
+		if (parsed.kind === "close") {
+			return { type: "session_close", requestId, updateId, chatId, token, target: parsed.target, force: true };
+		}
+		return { type: "session_resume", requestId, updateId, chatId, token, target: parsed.target };
+	}
+
+	/**
+	 * Handle a paired-chat /session_* command: validate (shared validator),
+	 * route to the control endpoint, and reply with the outcome. Returns true
+	 * when the message was a lifecycle command (so the caller stops processing).
+	 */
+	private async handleLifecycleCommand(
+		text: string | undefined,
+		updateId: number | undefined,
+		threadId: number | undefined,
+	): Promise<boolean> {
+		if (!isLifecycleCommandText(text)) return false;
+		const reply = (body: string) =>
+			this.botApi
+				.call("sendMessage", {
+					chat_id: this.opts.chatId,
+					...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+					text: body,
+				})
+				.catch(() => undefined);
+
+		if (!this.lifecycleControlActive) {
+			await reply("Session lifecycle control is not available right now.");
+			return true;
+		}
+		if (updateId !== undefined && this.seenUpdateIds.has(updateId)) return true;
+		if (updateId !== undefined) this.seenUpdateIds.add(updateId);
+
+		const parsed = parseLifecycleCommand(text);
+		if (parsed.kind === "none") return false;
+		if (parsed.kind === "usage" || parsed.kind === "reject") {
+			await reply(parsed.message);
+			return true;
+		}
+		if (parsed.kind === "recent") {
+			const recent = listRecentSessions({
+				sessionsRoot: path.join(this.opts.settings.getAgentDir(), "sessions"),
+				limit: 10,
+			});
+			const lines = recent.length
+				? recent.map(e => `\u2022 ${e.sessionId}${e.path ? ` (${e.path})` : ""}`).join("\n")
+				: "No recent sessions.";
+			await reply(lines);
+			return true;
+		}
+
+		// Defensive shared-validator pre-check before any effect.
+		const verb =
+			parsed.kind === "create" ? "session_create" : parsed.kind === "close" ? "session_close" : "session_resume";
+		const valid = validateLifecycleTarget(verb, parsed.target);
+		if (!valid.ok) {
+			await reply(`${valid.message}\n\n${lifecycleUsage()}`);
+			return true;
+		}
+
+		const frame = this.buildLifecycleFrame(parsed, updateId ?? Date.now());
+		const response = await this.submitLifecycleFrame(frame);
+		await reply(this.formatLifecycleResponse(response));
+		return true;
+	}
+
+	/** Map a lifecycle response/error to a user-facing message (G010 surfacing). */
+	private formatLifecycleResponse(r: SessionLifecycleResponse): string {
+		return formatLifecycleOutcome(r);
 	}
 
 	constructor(private readonly opts: TelegramDaemonOptions) {
@@ -1113,6 +1461,20 @@ export class TelegramNotificationDaemon {
 	}
 
 	async handleTelegramUpdate(update: unknown): Promise<void> {
+		// Session-lifecycle command (/session_*): handled ONLY from the paired chat,
+		// gated before any arg parsing or side effect, and routed through the control
+		// endpoint. Must run before threaded-injection so commands are not treated as
+		// session input.
+		{
+			const m = (update as { update_id?: number; message?: Record<string, unknown> }).message;
+			const chatId = (m?.chat as { id?: unknown } | undefined)?.id;
+			const cmdText = typeof m?.text === "string" ? m.text : undefined;
+			if (m !== undefined && String(chatId) === String(this.opts.chatId) && isLifecycleCommandText(cmdText)) {
+				const updateId = (update as { update_id?: number }).update_id;
+				const threadId = typeof m.message_thread_id === "number" ? (m.message_thread_id as number) : undefined;
+				if (await this.handleLifecycleCommand(cmdText, updateId, threadId)) return;
+			}
+		}
 		// Threaded injection: a free-text message in a known topic (not a button
 		// tap and not a reply to a specific ask message) injects a user turn or an
 		// in-thread config command. Fail-closed: paired chat + known topic +
@@ -1300,6 +1662,9 @@ export class TelegramNotificationDaemon {
 			await this.loadAliases();
 			await this.loadTopics();
 			await this.runScan();
+			// Owner-only: start the session-lifecycle control server now that
+			// ownership is confirmed (singleton-safe). Best-effort; degrades.
+			await this.startLifecycleControl();
 			let idleSince = (this.opts.now ?? Date.now)();
 			let pollBackoffMs = 0;
 			while (this.running) {
@@ -1316,10 +1681,17 @@ export class TelegramNotificationDaemon {
 					break;
 				await this.runScan();
 				if (await this.controlStopRequested()) break;
-				if (this.sessions.size === 0) {
-					if ((this.opts.now ?? Date.now)() - idleSince >= (this.opts.idleTimeoutMs ?? 60_000)) break;
+				const idleElapsed = (this.opts.now ?? Date.now)() - idleSince >= (this.opts.idleTimeoutMs ?? 60_000);
+				if (this.sessions.size === 0 && !this.lifecycleControlActive) {
+					// No sessions and no lifecycle control: idle-exit on timeout.
+					if (idleElapsed) break;
 				} else {
-					idleSince = (this.opts.now ?? Date.now)();
+					// Poll getUpdates when sessions exist OR lifecycle control is active
+					// (so phone /session_* commands are received even with zero sessions).
+					// With zero sessions, still idle-exit after the timeout so the owner
+					// does not run forever; an active session resets the idle window.
+					if (this.sessions.size > 0) idleSince = (this.opts.now ?? Date.now)();
+					else if (idleElapsed) break;
 					this.activePoll = new AbortController();
 					try {
 						await this.pollOnce(this.activePoll.signal);
@@ -1343,6 +1715,7 @@ export class TelegramNotificationDaemon {
 			this.stopFlushTimer();
 			this.stopScanTimer();
 			this.stopTypingTimer();
+			this.stopLifecycleControl();
 			// Persist durable state before releasing ownership so a fresh daemon
 			// (e.g. after reload) reloads aliases/topics seamlessly.
 			await this.persistAliases().catch(() => undefined);
