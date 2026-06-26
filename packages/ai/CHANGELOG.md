@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-24
+
+### Fixed
+
+- Reject truncated or incomplete streamed tool calls instead of executing them with partial arguments, so a cut-off tool-call payload fails fast rather than running against a mismatched schema.
+
+## [0.7.1] - 2026-06-23
+
+### Changed
+
+- Reworked the unofficial, opt-in `glm-zcode` provider to mirror how the ZCode desktop app actually reaches GLM: after the ZCode OAuth handshake it now auto-provisions a real Z.AI API key and calls `api.z.ai/api/anthropic` directly, instead of the `zcode.z.ai` coding-plan gateway that required an Aliyun captcha and a ZCode-JWT-bound plan entitlement. Requests also carry ZCode client source headers (`User-Agent: ZCode/<ver>`, `X-ZCode-Agent: glm`, plus platform/locale/timezone), so Z.AI recognizes the caller as the ZCode client (#1013, #1016, #1017).
+
 ## [0.7.0] - 2026-06-22
 
 ### Added

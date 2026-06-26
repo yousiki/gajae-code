@@ -1,9 +1,53 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added the `gruvbox-dark` built-in theme: the canonical Gruvbox dark palette mapped across every GJC theme token, selectable via `/theme`.
+
+### Changed
+
+- Refined the interactive composer chrome so the input box, status rail, and welcome banner share one visual language: the composer now uses a rounded border (matching the rounded welcome banner) instead of a sharp rectangle, and the status rail uses the subtle elevated `userMessageBg` surface tone instead of the heavy `statusLineBg` block, so it reads as a quiet layered zone rather than a solid bar. Both resolve through existing semantic theme slots, so every bundled theme tracks automatically.
+### Documentation
+
+- Documented the docs-only Aside evaluation boundary as an opt-in search/context retrieval sidecar using explicit user-provided MCP configuration, with browser actions, login flows, payments, internal tools, secrets, and raw browser/session payload logging out of scope by default (#1097).
+- Documented the Windows psmux namespace boundary for `gjc --tmux`, `gjc session`, and `gjc team`: cwd/`-c` is now called out as a start directory rather than server isolation, `-L <namespace>` is identified as the psmux namespace primitive, and tmux command overrides are documented as executable names rather than shell command lines (#1118).
+
+### Fixed
+
+- Expanded the initial GJC forge welcome box to the live terminal viewport width and pinned the status/composer area to the bottom when the startup layout is shorter than the screen (#1120).
+
+- Deep Interview Restate/option gates now recover through the ask selector path instead of waiting on plaintext `Options:` output.
+
+- `gjc team` now adopts any real tmux session as its leader — including one you started yourself outside `gjc --tmux` — by writing and reading back GJC's `@gjc-profile` ownership tag, instead of only accepting `gjc --tmux`-launched sessions. Providers that cannot round-trip tmux user options (e.g. psmux) are still rejected as unmanaged.
+
+- `gjc team` now fails with actionable guidance when there is no tmux leader to host workers: running it with no tmux installed reports `tmux_not_installed`, and running it outside any tmux session reports `not_inside_tmux` (with a hint to start one via `gjc --tmux` or your own `tmux`, or use `--dry-run`), instead of surfacing raw tmux stderr.
+
+## [0.7.2] - 2026-06-24
+### Added
+
+- Added a keyless `insane` web search provider that safely ports upstream insane-search public-route fallbacks without TLS impersonation, browser/cookie bypasses, credential storage, or auto-installed dependencies (#1011).
+- `web_search` `auto` mode now drives native provider search over proxies/custom endpoints by reusing the active model's own credential + baseUrl when canonical native creds are absent: `activeContextNativeId()` matches the model's wire api (+ model-id family) to `anthropic` (anthropic-messages), `openai-compatible` (openai-responses/completions), or `gemini` (google-generative-ai Generative Language), each falling back to DuckDuckGo if the endpoint does not support web search.
+- Added built-in C# LSP detection for `csharp-ls`, with `omnisharp` preserved as a fallback when `csharp-ls` is unavailable (#1054).
+- Added Discord and Slack notification adapters alongside the existing Telegram surface, so action-needed signals and replies can be routed to those clients (#1043).
+- Telegram daemon now supports inbound and outbound photo/file attachments, forwarding agent images and accepting user-sent media (#1053).
+- `gjc` verifies Telegram Threaded Mode during notification setup and falls back to a flat private chat when topics are unavailable (#1029).
+
+### Fixed
+
+- Hardened context-overflow recovery so automatic maintenance clears the TUI loader, surfaces overflow completion/skip status, retries resumable tails safely, and falls back to the synthetic auto-continue prompt for non-resumable tails when enabled.
+- `web_search` native providers no longer discard genuinely grounded answers that omit structured `url_citation` annotations: when a search demonstrably ran — Responses `web_search_call` / `tool_usage.web_search`, a Chat Completions search request, or Anthropic `web_search_tool_result` / `server_tool_use` / `server_tool_use.web_search_requests` — sources are recovered from inline markdown links and bare URLs. Inline recovery is gated on that real-search signal so a stray prose URL in a non-search answer is never promoted to a citation, and Anthropic now fails closed to DuckDuckGo when Claude answers from stable knowledge without searching. Inline-citation helpers are shared via `providers/text-citations.ts`.
+- Preserve GJC-managed tmux sessions on attach/disconnect instead of tearing them down, and stop implicitly attaching on launch (#1063).
+- Corrected the auto-compaction output reserve so post-compaction responses keep adequate headroom (#1021).
+- Improved active-input shortcut hints and the busy-input queueing hint for clearer in-session guidance (#1022, #1024).
+- Fixed the Ultragoal ask guard blocking the `ask` tool when no GJC session can be resolved. `ultragoalReadPaths` falls back to the legacy/global `.gjc/ultragoal` directory when neither `GJC_SESSION_ID` nor an auto-detectable active session is present, but the follow-up `readUltragoalPlan`/`readUltragoalLedger` reads ignored that resolution and re-ran session detection, throwing `no active GJC session found` and surfacing `durable_state_unreadable` — which blocked `ask` for every agent even with no active Ultragoal run. `ultragoalReadPaths` now returns the resolved session id (or `null`); the ask guard treats a null session as inactive and falls open, and threads the resolved id into the plan/ledger reads so they no longer re-resolve. An inconsistent state (state dir present but `goals.json` missing/empty) still fails closed so the pause guard keeps blocking give-ups.
+
+## [0.7.1] - 2026-06-23
 ### Fixed
 
 - Fixed packaged source installs (`gajae-code` wrapper) failing `gjc --smoke-test` because native smoke/fallback imports used monorepo-relative paths instead of the `@gajae-code/natives` package export.
+- Fixed Telegram/notification turn ordering around pending asks: the assistant's lead-in text is now emitted before the ask prompt, and only the assistant `message_end` is captured as the pre-ask turn text, so remote prompts show the correct context instead of stale or duplicated output (#1006, #1007).
 
 ## [0.7.0] - 2026-06-22
 
@@ -133,6 +177,7 @@
 - Added an opt-in `gjc rlm` research mode (v1, interactive): a Jupyter-notebook-style research session over the existing agent loop, backed by the shared persistent Python kernel. It loads a distinct research system prompt, restricts the toolset to a hard-gated allowlist (`python` + `read` + `web_search`, asserted after tool-registry assembly — no `bash`/edit/arbitrary mutation), optionally loads a project-root `DATA.md` (overridable via `--data <path>`), aggregates every executed cell live into `.gjc/rlm/<session>/notebook.ipynb` (single-queue atomic temp-rename writes with post-write validation), and synthesizes `.gjc/rlm/<session>/report.md` on session exit. Autonomous goal-arg runs, `--resume`, managed per-workspace venv provisioning, and the optional `>=N` completion gate are deferred follow-ups.
 - Added an experimental opt-in `computer` desktop-control tool surface for local macOS screenshot/input coordination, backed by native `ComputerController`/`computerScreenshot` bindings and gated through settings/tool registration so it can continue stabilizing on `dev` outside the 0.5.4 patch release.
 - Dropped deprecated GitHub Actions Intel macOS (`macos-13` / `darwin-x64`) release-binary coverage after the runner pool repeatedly blocked v0.6.0 publish; Intel macOS users should install through npm/Bun or build from source.
+- Re-enabled GitHub Actions Intel macOS (`darwin-x64`) release-binary coverage using the `macos-15-intel` runner, so standalone `gjc-darwin-x64` binaries ship again alongside Apple Silicon.
 
 ## [0.5.4] - 2026-06-17
 

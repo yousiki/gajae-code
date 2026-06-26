@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AgentToolContext } from "@gajae-code/agent-core";
 import { Settings } from "@gajae-code/coding-agent/config/settings";
+import type { AppendOrMergeResult } from "@gajae-code/coding-agent/gjc-runtime/deep-interview-recorder";
 import * as deepInterviewRecorder from "@gajae-code/coding-agent/gjc-runtime/deep-interview-recorder";
 import { getThemeByName, initTheme } from "@gajae-code/coding-agent/modes/theme/theme";
 import type { ToolSession } from "@gajae-code/coding-agent/tools";
@@ -1448,6 +1449,151 @@ describe("AskTool deep-interview rendering middleware", () => {
 		const dialogOptions = select.mock.calls[0]?.[2];
 		expect(dialogOptions?.scrollTitleRows).toBe(Number.MAX_SAFE_INTEGER);
 		expect(dialogOptions?.helpText).toContain("wheel/PgUp/PgDn scroll question");
+	});
+
+	it("opts structured deep-interview questions into local prompt scrolling", async () => {
+		spyOn(deepInterviewRecorder, "appendOrMergeDeepInterviewRound").mockResolvedValue({
+			action: "created",
+			record: {} as AppendOrMergeResult["record"],
+		});
+		spyOn(deepInterviewRecorder, "syncDeepInterviewRecorderHud").mockResolvedValue(undefined);
+		const tool = new AskTool(createSession({ getSessionId: () => "session-structured-scroll" }));
+		const rawQuestion = [
+			"The user-facing context is long enough that answer options can be pushed off screen.",
+			"",
+			"Which answer should prove the question area remains scrollable?",
+		].join("\n");
+		const select = vi.fn(
+			async (_prompt: string, options: string[], _dialogOptions?: { scrollTitleRows?: number; helpText?: string }) =>
+				options[0],
+		);
+		const context = createContext({ select });
+
+		await tool.execute(
+			"call-structured-deep-interview-scroll",
+			{
+				questions: [
+					{
+						id: "round-6",
+						question: rawQuestion,
+						options: [{ label: "Keep question scrolling" }, { label: "Regular selection" }],
+						deepInterview: {
+							round: 6,
+							component: "Selector UI",
+							dimension: "Readability",
+							ambiguity: 0.41,
+						},
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		const dialogOptions = select.mock.calls[0]?.[2];
+		expect(dialogOptions?.scrollTitleRows).toBe(Number.MAX_SAFE_INTEGER);
+		expect(dialogOptions?.helpText).toContain("wheel/PgUp/PgDn scroll question");
+	});
+
+	it("Restate gate displays numbered selector labels while returning the raw selected label", async () => {
+		spyOn(deepInterviewRecorder, "appendOrMergeDeepInterviewRound").mockResolvedValue({
+			action: "created",
+			record: {} as AppendOrMergeResult["record"],
+		});
+		spyOn(deepInterviewRecorder, "syncDeepInterviewRecorderHud").mockResolvedValue(undefined);
+		const tool = new AskTool(createSession({ getSessionId: () => "session-restate-select" }));
+		const select = vi.fn(
+			async (_prompt: string, options: string[], _dialogOptions?: { scrollTitleRows?: number; helpText?: string }) =>
+				options[0],
+		);
+		const context = createContext({ select });
+
+		const result = await tool.execute(
+			"call-restate-gate-select",
+			{
+				questions: [
+					{
+						id: "restate-gate",
+						question: "If someone read only this line, would they know exactly what to build, avoid, and verify?",
+						options: [{ label: "Yes, crystallize" }, { label: "Adjust wording" }, { label: "Missing scope" }],
+						deepInterview: {
+							round: 9,
+							component: "Restate gate",
+							dimension: "Confirmation",
+							ambiguity: 0.17,
+						},
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(select).toHaveBeenCalledTimes(1);
+		const displayOptions = select.mock.calls[0]?.[1] ?? [];
+		expect(displayOptions).toContain("1. Yes, crystallize");
+		expect(displayOptions).toContain("2. Adjust wording");
+		expect(displayOptions).toContain("3. Missing scope");
+		const dialogOptions = select.mock.calls[0]?.[2];
+		expect(dialogOptions?.scrollTitleRows).toBe(Number.MAX_SAFE_INTEGER);
+		expect(result.details?.selectedOptions).toEqual(["Yes, crystallize"]);
+		expect(result.details?.customInput).toBeUndefined();
+	});
+
+	it("Restate gate records inline custom input without selected options", async () => {
+		spyOn(deepInterviewRecorder, "appendOrMergeDeepInterviewRound").mockResolvedValue({
+			action: "created",
+			record: {} as AppendOrMergeResult["record"],
+		});
+		spyOn(deepInterviewRecorder, "syncDeepInterviewRecorderHud").mockResolvedValue(undefined);
+		const tool = new AskTool(createSession({ getSessionId: () => "session-restate-custom" }));
+		const editor = vi.fn(async () => "editor fallback should not be used");
+		const select = vi.fn(
+			async (
+				_prompt: string,
+				options: string[],
+				dialogOptions?: {
+					scrollTitleRows?: number;
+					helpText?: string;
+					customInput?: { optionLabel: string; onSubmit: (text: string) => void };
+				},
+			) => {
+				dialogOptions?.customInput?.onSubmit("Clarify the verification boundary before crystallizing.");
+				return options[3];
+			},
+		);
+		const context = createContext({ select, editor });
+
+		const result = await tool.execute(
+			"call-restate-gate-custom",
+			{
+				questions: [
+					{
+						id: "restate-gate",
+						question: "If someone read only this line, would they know exactly what to build, avoid, and verify?",
+						options: [{ label: "Yes, crystallize" }, { label: "Adjust wording" }, { label: "Missing scope" }],
+						deepInterview: {
+							round: 9,
+							component: "Restate gate",
+							dimension: "Confirmation",
+							ambiguity: 0.17,
+						},
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(select.mock.calls[0]?.[1]).toContain("4. Other (type your own)");
+		expect(select.mock.calls[0]?.[2]?.scrollTitleRows).toBe(Number.MAX_SAFE_INTEGER);
+		expect(editor).not.toHaveBeenCalled();
+		expect(result.details?.selectedOptions).toEqual([]);
+		expect(result.details?.customInput).toBe("Clarify the verification boundary before crystallizing.");
 	});
 
 	it("leaves non-deep-interview selector prompts without scroll-title opt-in", async () => {

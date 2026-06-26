@@ -785,6 +785,15 @@ export function firepassModelManagerOptions(
 // 7. Mistral
 // ---------------------------------------------------------------------------
 
+export interface FuguModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function fuguModelManagerOptions(config?: FuguModelManagerConfig): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("fugu", config?.baseUrl ?? "https://api.sakana.ai/v1", config);
+}
+
 export interface MistralModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -2282,7 +2291,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	anthropicMessagesDescriptor(
 		"glm-zcode-coding-plan",
 		"glm-zcode",
-		process.env.ZCODE_PLAN_ANTHROPIC_BASE_URL ?? "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+		process.env.ZCODE_PLAN_ANTHROPIC_BASE_URL ?? "https://api.z.ai/api/anthropic",
 	),
 	// --- Xiaomi ---
 	openAiCompletionsDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/v1", {

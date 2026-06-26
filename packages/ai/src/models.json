@@ -75704,14 +75704,7 @@
 			"name": "GLM-5.2 (ZCode)",
 			"api": "anthropic-messages",
 			"provider": "glm-zcode",
-			"baseUrl": "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
-			"headers": {
-				"User-Agent": "ZCode/1.0.0",
-				"HTTP-Referer": "https://zcode.z.ai",
-				"X-Title": "Z Code@electron",
-				"X-ZCode-App-Version": "1.0.0",
-				"X-ZCode-Agent": "glm"
-			},
+			"baseUrl": "https://api.z.ai/api/anthropic",
 			"reasoning": true,
 			"input": [
 				"text"
@@ -79762,6 +79755,72 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
+			}
+		}
+	},
+	"fugu": {
+		"fugu": {
+			"id": "fugu",
+			"name": "Sakana Fugu",
+			"api": "openai-completions",
+			"provider": "fugu",
+			"baseUrl": "https://api.sakana.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 65536,
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsMultipleSystemMessages": false,
+				"supportsReasoningEffort": false,
+				"supportsUsageInStreaming": true,
+				"maxTokensField": "max_tokens"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"fugu-ultra": {
+			"id": "fugu-ultra",
+			"name": "Sakana Fugu Ultra",
+			"api": "openai-completions",
+			"provider": "fugu",
+			"baseUrl": "https://api.sakana.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 65536,
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsMultipleSystemMessages": false,
+				"supportsReasoningEffort": false,
+				"supportsUsageInStreaming": true,
+				"maxTokensField": "max_tokens"
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	}

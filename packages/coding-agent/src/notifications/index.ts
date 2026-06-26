@@ -24,11 +24,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import type { ImageContent, TextContent } from "@gajae-code/ai";
 import { NotificationServer } from "@gajae-code/natives";
 import { logger } from "@gajae-code/utils";
 import { Settings } from "../config/settings";
 import type { ExtensionCommandContext, ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import { registerAskAnswerSource } from "../tools/ask-answer-registry";
+import { registerTelegramFileSink } from "./attachment-registry";
 import {
 	getNotificationConfig,
 	isGloballyConfigured,
@@ -323,7 +325,10 @@ interface SessionRuntime {
 	pendingInteractive: Map<string, PendingInteractiveAsk>;
 	/** Deregisters this session's ask answer source. */
 	disposeAnswerSource: () => void;
+	/** Deregisters this session's Telegram file sink. */
+	disposeFileSink: () => void;
 	redact: boolean;
+	verbosity: "lean" | "verbose";
 	sessionTag: string;
 	/** Whether the agent loop is currently running (drives the typing indicator). */
 	busy: boolean;
@@ -344,6 +349,16 @@ interface ResolvedSettings {
 
 const defaultConfig: NotificationConfig = {
 	enabled: false,
+	botToken: undefined,
+	chatId: undefined,
+	discord: {
+		botToken: undefined,
+		channelId: undefined,
+	},
+	slack: {
+		botToken: undefined,
+		channelId: undefined,
+	},
 	redact: false,
 	verbosity: "lean",
 	idleTimeoutMs: 60_000,
@@ -415,6 +430,56 @@ function mapAnswerToGate(
 	return { selected: [] };
 }
 
+/** Register the interactive `ask` answer source for a session (the ask tool
+ * races the local UI against a remote reply). Returns the deregister disposer. */
+function registerInteractiveAnswerSource(
+	id: string,
+	server: NotificationServer,
+	pendingInteractive: Map<string, PendingInteractiveAsk>,
+	getRedact: () => boolean,
+	tag: string,
+): () => void {
+	return registerAskAnswerSource(id, {
+		awaitAnswer(question, options, signal) {
+			if (signal?.aborted) return Promise.resolve(undefined);
+			const askId = `ask:${crypto.randomUUID()}`;
+			try {
+				server.registerAsk(
+					JSON.stringify(
+						notificationActionPayload(
+							{ id: askId, kind: "ask", sessionId: id, question, options },
+							{ redact: getRedact(), sessionTag: tag },
+						),
+					),
+					true,
+				);
+			} catch (e) {
+				logger.warn(`notifications: registerAsk failed: ${String(e)}`);
+				return Promise.resolve(undefined);
+			}
+			return new Promise<string | undefined>(resolve => {
+				pendingInteractive.set(askId, { resolve, options });
+				signal?.addEventListener("abort", () => {
+					if (!pendingInteractive.delete(askId)) return;
+					// Local UI answered: mark the remote action resolved-locally.
+					try {
+						server.resolveLocal(askId, undefined);
+					} catch {}
+					resolve(undefined);
+				});
+			});
+		},
+	});
+}
+
+/** Extract the session id from a `<timestamp>_<uuid>.jsonl` session file path. */
+function sessionIdFromFile(file: string | undefined): string | undefined {
+	if (!file) return undefined;
+	const base = path.basename(file).replace(/\.jsonl$/, "");
+	const underscore = base.indexOf("_");
+	return underscore >= 0 ? base.slice(underscore + 1) : undefined;
+}
+
 export const createNotificationsExtension: ExtensionFactory = api => {
 	const runtimes = new Map<string, SessionRuntime>();
 	const disabledSessions = new Set<string>();
@@ -426,6 +491,7 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		runtimes.delete(id);
 		try {
 			rt.disposeAnswerSource();
+			rt.disposeFileSink();
 		} catch {}
 		// Resolve any still-pending interactive asks so the ask tool is not left hanging.
 		for (const pending of rt.pendingInteractive.values()) pending.resolve(undefined);
@@ -458,6 +524,8 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		const pendingInteractive = new Map<string, PendingInteractiveAsk>();
 		const tag = sessionTag(id);
 		const redact = cfg.redact;
+		const verbosity = cfg.verbosity;
+		let runtime: SessionRuntime | undefined;
 
 		// The SDK can always answer now (interactive via the answer source, or the
 		// unattended gate), so the endpoint advertises a resolver.
@@ -504,23 +572,58 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		// thread (forwarded by the daemon over the WS, fail-closed at the daemon).
 		server.onInbound((err, inbound) => {
 			if (err || !inbound) return;
-			if (inbound.kind === "user_message" && inbound.text) {
+			if (inbound.kind === "user_message") {
 				// Inject as a user turn (steers/continues the agent; the resulting
 				// turn streams back via the turn_end handler even when not idle).
 				// Record the update id so it can be acked as "consumed" on the next
 				// turn_start, and steer (vs start a fresh turn) when already busy.
-				const rt = runtimes.get(id);
-				if (rt && typeof inbound.updateId === "number") rt.pendingInbound.add(inbound.updateId);
+				const text = inbound.text ?? "";
+				const images = inbound.images ?? [];
+				if (!text && images.length === 0) return;
+				if (runtime && typeof inbound.updateId === "number") runtime.pendingInbound.add(inbound.updateId);
+				const content: string | (TextContent | ImageContent)[] =
+					images.length > 0
+						? [
+								...(text ? [{ type: "text", text } as TextContent] : []),
+								...images.map(
+									img =>
+										({ type: "image", data: img.data, mimeType: img.mime ?? "image/jpeg" }) as ImageContent,
+								),
+							]
+						: text;
 				try {
-					api.sendUserMessage(inbound.text, rt?.busy ? { deliverAs: "steer" } : undefined);
+					api.sendUserMessage(content, runtime?.busy ? { deliverAs: "steer" } : undefined);
 				} catch (e) {
 					logger.warn(`notifications: sendUserMessage failed: ${String(e)}`);
 				}
 				return;
 			}
 			if (inbound.kind === "config_command") {
-				const rt = runtimes.get(id);
-				if (rt && typeof inbound.redact === "boolean") rt.redact = inbound.redact;
+				if (!runtime) return;
+				const update: {
+					type: "config_update";
+					sessionId: string;
+					verbosity?: "lean" | "verbose";
+					redact?: boolean;
+				} = {
+					type: "config_update",
+					sessionId: id,
+				};
+				if (inbound.verbosity === "lean" || inbound.verbosity === "verbose") {
+					runtime.verbosity = inbound.verbosity;
+					update.verbosity = inbound.verbosity;
+				}
+				if (typeof inbound.redact === "boolean") {
+					runtime.redact = inbound.redact;
+					update.redact = inbound.redact;
+				}
+				if (update.verbosity !== undefined || update.redact !== undefined) {
+					try {
+						runtime.server.pushFrame(JSON.stringify(update));
+					} catch (e) {
+						logger.warn(`notifications: config_update failed: ${String(e)}`);
+					}
+				}
 			}
 		});
 
@@ -528,48 +631,44 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 			const endpoint = await server.start();
 
 			// Interactive answer source: the ask tool races the local UI against this.
-			const disposeAnswerSource = registerAskAnswerSource(id, {
-				awaitAnswer(question, options, signal) {
-					if (signal?.aborted) return Promise.resolve(undefined);
-					const askId = `ask:${crypto.randomUUID()}`;
-					try {
-						server.registerAsk(
-							JSON.stringify(
-								notificationActionPayload(
-									{ id: askId, kind: "ask", sessionId: id, question, options },
-									{ redact, sessionTag: tag },
-								),
-							),
-							true,
-						);
-					} catch (e) {
-						logger.warn(`notifications: registerAsk failed: ${String(e)}`);
-						return Promise.resolve(undefined);
-					}
-					return new Promise<string | undefined>(resolve => {
-						pendingInteractive.set(askId, { resolve, options });
-						signal?.addEventListener("abort", () => {
-							if (!pendingInteractive.delete(askId)) return;
-							// Local UI answered: mark the remote action resolved-locally.
-							try {
-								server.resolveLocal(askId, undefined);
-							} catch {}
-							resolve(undefined);
-						});
-					});
-				},
+			const disposeAnswerSource = registerInteractiveAnswerSource(
+				id,
+				server,
+				pendingInteractive,
+				() => runtime?.redact ?? redact,
+				tag,
+			);
+			const disposeFileSink = registerTelegramFileSink(id, async file => {
+				try {
+					const data = await fs.promises.readFile(file.path);
+					server.pushFrame(
+						JSON.stringify({
+							type: "file_attachment",
+							sessionId: id,
+							name: path.basename(file.path),
+							data: data.toString("base64"),
+							caption: file.caption,
+						}),
+					);
+					return { ok: true };
+				} catch (e) {
+					return { ok: false, error: e instanceof Error ? e.message : String(e) };
+				}
 			});
 
-			runtimes.set(id, {
+			runtime = {
 				server,
 				idleSeq: 0,
 				pendingInteractive,
 				disposeAnswerSource,
+				disposeFileSink,
 				redact,
+				verbosity,
 				sessionTag: tag,
 				busy: false,
 				pendingInbound: new Set<number>(),
-			});
+			};
+			runtimes.set(id, runtime);
 			logger.info(`notifications: serving session ${id} at ${endpoint.url} (unattended=${unattended})`);
 
 			if (settingsAvailable && settings && isGloballyConfigured(cfg)) {
@@ -688,8 +787,9 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 			const running = runtimes.has(id);
 			const locallyDisabled = disabledSessions.has(id);
 			const enabled = isEnabledForSession(id, resolved.cfg);
+			const runtime = runtimes.get(id);
 			ctx.ui.notify(
-				`Notifications ${running ? "running" : enabled ? "enabled" : "disabled"} for this session; redaction ${resolved.cfg.redact ? "on" : "off"}${locallyDisabled ? "; locally off" : ""}.`,
+				`Notifications ${running ? "running" : enabled ? "enabled" : "disabled"} for this session; redaction ${(runtime?.redact ?? resolved.cfg.redact) ? "on" : "off"}; verbosity ${runtime?.verbosity ?? resolved.cfg.verbosity}${locallyDisabled ? "; locally off" : ""}.`,
 				"info",
 			);
 		},
@@ -697,6 +797,82 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 
 	api.on("session_start", async (_event, ctx) => {
 		await startSession(ctx);
+	});
+
+	// A session id change within the same process needs reason-aware handling.
+	// `/new` and fork CONTINUE the same terminal thread (e.g. plan "approve and
+	// execute" clears into a fresh session), so re-key the existing runtime
+	// old→new WITHOUT recreating the NotificationServer: the server, its endpoint
+	// discovery file, and the daemon's forum topic are all keyed by the original
+	// session id and the daemon routes by socket, so the existing topic is reused
+	// and the next identity frame renames it in place instead of spawning a new
+	// thread. `resume`, by contrast, loads a DIFFERENT, already-persisted session
+	// that owns its own topic — tear the previous runtime down and start fresh
+	// under the resumed id so the daemon attaches to (or recreates) that
+	// session's own discovery + topic rather than hijacking this terminal's.
+	api.on("session_switch", async (event, ctx) => {
+		const newId = sessionId(ctx);
+		const prevId = sessionIdFromFile(event.previousSessionFile);
+		if (!prevId || prevId === newId) return;
+
+		if (event.reason === "resume") {
+			stopSession(prevId);
+			await startSession(ctx);
+			return;
+		}
+
+		// `/new` / fork: re-key in place and rename the existing topic.
+		if (disabledSessions.delete(prevId)) disabledSessions.add(newId);
+		const rt = runtimes.get(prevId);
+		if (!rt || runtimes.has(newId)) return;
+		runtimes.delete(prevId);
+		runtimes.set(newId, rt);
+		// Re-bind the interactive ask answer source: the ask tool resolves the
+		// source by the current session id, which just changed.
+		try {
+			rt.disposeAnswerSource();
+			rt.disposeFileSink();
+		} catch {}
+		rt.disposeAnswerSource = registerInteractiveAnswerSource(
+			newId,
+			rt.server,
+			rt.pendingInteractive,
+			() => rt.redact,
+			rt.sessionTag,
+		);
+		rt.disposeFileSink = registerTelegramFileSink(newId, async file => {
+			try {
+				const data = await fs.promises.readFile(file.path);
+				rt.server.pushFrame(
+					JSON.stringify({
+						type: "file_attachment",
+						sessionId: newId,
+						name: path.basename(file.path),
+						data: data.toString("base64"),
+						caption: file.caption,
+					}),
+				);
+				return { ok: true };
+			} catch (e) {
+				return { ok: false, error: e instanceof Error ? e.message : String(e) };
+			}
+		});
+		// Rename the existing topic now when the new session already has a name; a
+		// fresh unnamed session is renamed on its next agent_end re-assert, which
+		// avoids a transient rename to bare "repo/branch".
+		if (ctx.sessionManager.getSessionName()) {
+			try {
+				rt.server.pushFrame(
+					JSON.stringify({
+						type: "identity_header",
+						sessionId: newId,
+						...buildIdentity(ctx.cwd, ctx.sessionManager.getSessionName()),
+					}),
+				);
+			} catch (e) {
+				logger.warn(`notifications: identity_header (switch) failed: ${String(e)}`);
+			}
+		}
 	});
 
 	// Drive the live typing indicator: mark busy when the agent loop starts so
@@ -780,7 +956,7 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		// On idle, stream a context update with metadata (token/model usage +
 		// working-tree diff) unless redaction is on. The agent's last message is
 		// NOT repeated here — it is already streamed once via `turn_stream`.
-		if (!rt.redact) {
+		if (!rt.redact && rt.verbosity === "verbose") {
 			const usage = (
 				ctx as { getContextUsage?: () => { tokens: number | null; contextWindow: number } | undefined }
 			).getContextUsage?.();

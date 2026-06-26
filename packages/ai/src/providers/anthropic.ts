@@ -1,5 +1,6 @@
 import * as nodeCrypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
 import Anthropic, { type ClientOptions as AnthropicSdkClientOptions } from "@anthropic-ai/sdk";
@@ -93,6 +94,13 @@ export type AnthropicHeaderOptions = {
 	stream?: boolean;
 	modelHeaders?: Record<string, string>;
 	isCloudflareAiGateway?: boolean;
+	/**
+	 * Attach ZCode client "source" headers (User-Agent: ZCode/<ver>, X-Title,
+	 * X-ZCode-Agent: glm, X-Platform, etc.) so api.z.ai recognizes the caller as
+	 * the ZCode client, exactly like ZCode's `buildZCodeSourceHeaders` does for
+	 * GLM providers. glm-zcode only.
+	 */
+	zcodeSourceHeaders?: boolean;
 };
 
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined {
@@ -161,6 +169,67 @@ const sharedHeaders = {
 	"X-App": "cli",
 };
 
+// ZCode bakes its app version and runtime env at build time. Mirror the values
+// from the analyzed ZCode 3.1.2 desktop bundle (`resolveRuntimeZCodeEnv` returns
+// "production" for non-test builds). Both are overridable for forward-compat.
+const ZCODE_APP_VERSION = process.env.ZCODE_APP_VERSION?.trim() || "3.1.2";
+const ZCODE_RELEASE_CHANNEL = process.env.ZCODE_RELEASE_CHANNEL?.trim() || "production";
+
+// Mirrors ZCode's `normalizePrintableHeaderValue`: only printable ASCII passes.
+function normalizePrintableHeaderValue(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (trimmed && /^[\x20-\x7e]+$/.test(trimmed)) return trimmed;
+	return undefined;
+}
+
+// Mirrors ZCode's `normalizeOsCategory`.
+function normalizeOsCategory(platform: NodeJS.Platform): string {
+	switch (platform) {
+		case "darwin":
+			return "macos";
+		case "win32":
+			return "windows";
+		default:
+			return "linux";
+	}
+}
+
+/**
+ * Replicates ZCode's `buildZCodeSourceHeaders()` + GLM `X-ZCode-Agent` tag
+ * (host bundle `Bl` / `buildConnectivitySourceHeaders` for GLM providers), so
+ * api.z.ai sees gjc's glm-zcode requests as the ZCode client. Dynamic values
+ * (platform/arch, locale, timezone, OS version) are resolved at runtime exactly
+ * as ZCode does; printable-ASCII-only and conditionally omitted when empty.
+ */
+export function buildZCodeSourceHeaders(): Record<string, string> {
+	const platform = process.platform;
+	const arch = process.arch;
+	const appVersion = normalizePrintableHeaderValue(ZCODE_APP_VERSION);
+	const releaseChannel = normalizePrintableHeaderValue(ZCODE_RELEASE_CHANNEL);
+	let locale: string | undefined;
+	let timezone: string | undefined;
+	try {
+		const resolved = Intl.DateTimeFormat().resolvedOptions();
+		locale = normalizePrintableHeaderValue(resolved.locale);
+		timezone = normalizePrintableHeaderValue(resolved.timeZone);
+	} catch {}
+	const osVersion = normalizePrintableHeaderValue(os.version());
+	const headers: Record<string, string> = {
+		"User-Agent": `ZCode/${appVersion ?? "unknown"}`,
+		"HTTP-Referer": "https://zcode.z.ai",
+		"X-Title": "Z Code@electron",
+		"X-Platform": `${platform}-${arch}`,
+		"X-Client-Language": locale ?? "unknown",
+		"X-Client-Timezone": timezone ?? "unknown",
+		"X-Os-Category": normalizeOsCategory(platform),
+		"X-ZCode-Agent": "glm",
+	};
+	if (appVersion) headers["X-ZCode-App-Version"] = appVersion;
+	if (releaseChannel) headers["X-Release-Channel"] = releaseChannel;
+	if (osVersion) headers["X-Os-Version"] = osVersion;
+	return headers;
+}
+
 export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<string, string> {
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
@@ -197,6 +266,9 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		};
 	} else if (!isAnthropicApiBaseUrl(options.baseUrl)) {
 		const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
+		// ZCode merges its source headers LAST for GLM providers (`withZCodeSourceHeaders`
+		// → `{ ...base, ...extra, ...source }`), so they win over any incoming User-Agent.
+		const zcodeSourceHeaders = options.zcodeSourceHeaders ? buildZCodeSourceHeaders() : undefined;
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
@@ -204,6 +276,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...sharedHeaders,
 			"Anthropic-Beta": betaHeader,
 			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
+			...(zcodeSourceHeaders ?? {}),
 		};
 	} else {
 		return {
@@ -678,14 +751,11 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 	if (model.provider === "github-copilot") {
 		return normalizeAnthropicBaseUrl(resolveGitHubCopilotBaseUrl(model.baseUrl, apiKey) ?? model.baseUrl);
 	}
-	// glm-zcode is the unofficial ZCode coding-plan gateway. Pin its base to the
-	// ZCode plan gateway so dynamic discovery / stale bundled catalogs / model
-	// cache can never redirect it to api.z.ai (which rejects the ZCode JWT).
+	// glm-zcode logs in via ZCode's OAuth but auto-provisions a real Z.AI API key and
+	// calls api.z.ai directly (no zcode.z.ai gateway, no captcha). Pin the base so dynamic
+	// discovery / stale bundled catalogs / model cache can't redirect it elsewhere.
 	if (model.provider === "glm-zcode") {
-		return (
-			normalizeAnthropicBaseUrl(process.env.ZCODE_PLAN_ANTHROPIC_BASE_URL) ??
-			"https://zcode.z.ai/api/v1/zcode-plan/anthropic"
-		);
+		return normalizeAnthropicBaseUrl(process.env.ZCODE_PLAN_ANTHROPIC_BASE_URL) ?? "https://api.z.ai/api/anthropic";
 	}
 	if (model.provider === "anthropic" && isFoundryEnabled()) {
 		const foundryBaseUrl = normalizeAnthropicBaseUrl($env.FOUNDRY_BASE_URL);
@@ -1706,6 +1776,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		stream,
 		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
+		zcodeSourceHeaders: model.provider === "glm-zcode",
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {

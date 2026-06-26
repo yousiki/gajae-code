@@ -234,21 +234,29 @@ providers:
 
 ### Interactive `--tmux` startup and scroll/mouse profile
 
-`gjc --tmux` launches the interactive TUI inside a GJC-managed tmux session. GJC may reuse a scoped managed session from the same project/branch when that session is tagged with the current GJC version; older-version sessions are not auto-attached after upgrades. When GJC creates a session it applies a profile that is **scoped to the GJC session only** (it never runs `set -g` / global tmux options), including:
+`gjc --tmux` launches the interactive TUI inside a fresh GJC-managed tmux session. Plain `gjc --tmux` does not auto-attach a scoped managed session from the same project/branch; use an explicit resume path such as `gjc --tmux --continue`, `gjc --tmux --resume`, or `gjc session attach <session>` when you intend to continue existing tmux context. Older-version sessions are not auto-attached after upgrades. When GJC creates a session it applies a profile that is **scoped to the GJC session only** (it never runs `set -g` / global tmux options), including:
 
 - `mouse on` — enables mouse-wheel scrolling into tmux copy-mode (history/scrollback).
 - `set-clipboard on` and a readable copy-mode `mode-style`.
 - GJC ownership/identity tags (`@gjc-profile`, version, branch/project markers).
 
-This profile is applied on macOS, Linux, and WSL (Linux) alike; only native Windows (`win32`) skips the tmux launch. It is applied **only to sessions GJC itself creates**. If you start tmux yourself and then run `gjc` inside it, GJC leaves your tmux configuration untouched — add `set -g mouse on` to your own `~/.tmux.conf`, or relaunch with `gjc --tmux` to get the managed profile.
+This profile is applied on macOS, Linux, WSL (Linux), and native Windows when a compatible tmux provider is available. It is applied **only to sessions GJC itself creates**. If you start tmux yourself and then run `gjc` inside it, GJC leaves your tmux configuration untouched — add `set -g mouse on` to your own `~/.tmux.conf`, or relaunch with `gjc --tmux` to get the managed profile.
 
 | Variable | Behavior |
 | --- | --- |
 | `GJC_LAUNCH_POLICY` | Launch policy for `--tmux` startup: `tmux` (default) or `direct` (skip the tmux session) |
 | `GJC_TMUX_SESSION` | Explicit tmux session name override for `--tmux` startup. Use a unique value (for example `GJC_TMUX_SESSION=gjc-fresh-$(date +%s) gjc --tmux`) to force a fresh named session. |
-| `GJC_TMUX_COMMAND` | tmux binary/command override for every GJC tmux flow (`GJC_TEAM_TMUX_COMMAND` is honored as a team-path alias) |
+| `GJC_TMUX_COMMAND` | tmux binary/name override for every GJC tmux flow (`GJC_TEAM_TMUX_COMMAND` is honored as a team-path alias). This is not a shell command line; include only the executable path/name, not flags. |
 | `GJC_TMUX_PROFILE` | Set `0`/`false`/`off` to apply only the required ownership tags and skip the scroll/mouse/clipboard profile |
 | `GJC_MOUSE` | Set `0`/`false`/`off` to skip `mouse on`, leaving wheel scrolling to the host terminal instead of tmux copy-mode |
+
+#### Windows psmux namespace boundary
+
+On native Windows, `psmux` may be installed directly as `psmux.exe` or through its `tmux.exe`/`pmux.exe` aliases. The same guidance applies when `GJC_TMUX_COMMAND` is left at the default `tmux` but that executable is actually psmux.
+
+psmux follows tmux-style server semantics: `new-session -c <path>`, `new-window -c <path>`, and GJC's `gjc --tmux` cwd only choose the start directory for the session/window/pane. They do **not** create a per-project server namespace. psmux server isolation uses the tmux-compatible global flag `-L <namespace>`.
+
+GJC does not currently expose a supported `GJC_TMUX_NAMESPACE` runtime knob or parse flags from `GJC_TMUX_COMMAND`. Do not set `GJC_TMUX_COMMAND="psmux -L my-project"`; GJC treats the value as one executable path/name. Runtime `-L` support requires a structured tmux command resolver so launch, `gjc session`, and `gjc team` all target the same namespace. Until that exists, use real tmux for GJC-managed session/team flows, or manage psmux namespaces explicitly outside GJC and treat them as unsupported for GJC ownership-tag/team guarantees.
 
 #### WSL / Windows Terminal scrolling
 

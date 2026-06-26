@@ -919,6 +919,7 @@ mod tests {
 				token:      "secret".into(),
 				update_id:  Some(7),
 				thread_id:  Some("topic-1".into()),
+				images:     vec![],
 			}))
 			.unwrap()
 			.into(),
@@ -954,6 +955,7 @@ mod tests {
 				token:      "WRONG".into(),
 				update_id:  None,
 				thread_id:  None,
+				images:     vec![],
 			}))
 			.unwrap()
 			.into(),
