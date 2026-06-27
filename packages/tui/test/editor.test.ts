@@ -858,6 +858,22 @@ describe("Editor component", () => {
 			expect(visibleWidth(line!.slice(0, markerIndex))).toBe(2 + visibleWidth("한글"));
 		});
 
+		it("anchors terminal cursor at an empty placeholder", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setBorderVisible(false);
+			editor.setPromptGutter("> ");
+			editor.setPlaceholder("Describe the change");
+			editor.setUseTerminalCursor(true);
+			editor.focused = true;
+
+			const [line] = editor.render(40);
+			const markerIndex = line!.indexOf(CURSOR_MARKER);
+
+			expect(markerIndex).toBeGreaterThanOrEqual(0);
+			expect(visibleWidth(line!.slice(0, markerIndex))).toBe(2);
+			expect(Bun.stripANSI(line!.replaceAll(CURSOR_MARKER, ""))).toContain("Describe the change");
+		});
+
 		it("handles mixed ASCII and wide characters in wrapping", () => {
 			const editor = new Editor(defaultEditorTheme);
 			const width = 15;

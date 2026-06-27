@@ -851,11 +851,16 @@ export class Editor implements Component, Focusable {
 			const marker = emitCursorMarker ? CURSOR_MARKER : "";
 
 			if (showPlaceholder) {
-				displayText = hintStyle(truncateToWidth(this.#placeholder ?? "", lineContentWidth));
+				const hintText = hintStyle(truncateToWidth(this.#placeholder ?? "", lineContentWidth));
+				// Anchor the hardware cursor at the input start (terminal-cursor mode) even
+				// while the placeholder shows. Otherwise no cursor marker is emitted, the
+				// hardware cursor is left at its stale position from the previous frame,
+				// and a composing IME preedit renders there instead of at the prompt.
+				// The marker is zero-width and stripped before output, so the placeholder is unchanged.
+				const anchorCursor = emitCursorMarker && this.#useTerminalCursor && visibleIndex === 0;
+				displayText = anchorCursor ? marker + hintText : hintText;
 				displayWidth = Math.min(visibleWidth(this.#placeholder ?? ""), lineContentWidth);
-				if (!this.#useTerminalCursor) {
-					hasCursor = false;
-				}
+				hasCursor = false;
 			}
 
 			if (!borderVisible && displayWidth > lineContentWidth) {

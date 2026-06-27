@@ -554,6 +554,12 @@ export class HookSelectorComponent extends Container {
 		editor.setBorderVisible(false);
 		editor.setPromptGutter("> ");
 		editor.disableSubmit = true;
+		// Mark the inline editor focused only when mirroring the app's hardware-cursor
+		// mode, so it emits CURSOR_MARKER at the input caret for IME preedit anchoring
+		// without changing legacy non-hardware-cursor layout.
+		const useTerminalCursor = this.#tui?.getShowHardwareCursor() ?? false;
+		editor.focused = useTerminalCursor;
+		editor.setUseTerminalCursor(useTerminalCursor);
 		if (this.#autocompleteProvider) {
 			editor.setAutocompleteProvider(this.#autocompleteProvider);
 		}
