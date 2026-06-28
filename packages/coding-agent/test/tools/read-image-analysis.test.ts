@@ -4,12 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { completeSimple, Model } from "@gajae-code/ai";
 import { Settings } from "@gajae-code/coding-agent/config/settings";
-import { getThemeByName } from "@gajae-code/coding-agent/modes/theme/theme";
 import type { ToolSession } from "@gajae-code/coding-agent/tools";
-import { InspectImageTool } from "@gajae-code/coding-agent/tools/inspect-image";
-import { inspectImageToolRenderer } from "@gajae-code/coding-agent/tools/inspect-image-renderer";
-import { toolRenderers } from "@gajae-code/coding-agent/tools/renderers";
-import { sanitizeText } from "@gajae-code/utils";
+import { ReadTool } from "@gajae-code/coding-agent/tools/read";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -69,7 +65,7 @@ function createSession(
 			getAvailable: () => availableModels,
 			getApiKey: async () => apiKey,
 		} as unknown as NonNullable<ToolSession["modelRegistry"]>,
-	};
+	} as unknown as ToolSession;
 }
 
 function createCompleteSimpleSuccessStub(text: string): CompleteSimpleStub {
@@ -108,23 +104,23 @@ function createCompleteSimpleForbiddenStub(): CompleteSimpleStub {
 	return { calls, fn };
 }
 
-describe("InspectImageTool", () => {
+describe("read image analysis (question param)", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		testDir = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-inspect-image-"));
+		testDir = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-read-image-"));
 	});
 
 	afterEach(() => {
 		fs.rmSync(testDir, { recursive: true, force: true });
 	});
 
-	it("sends image and question to completeSimple and returns text-only result", async () => {
+	it("sends image and question to the vision model and returns text-only result", async () => {
 		const imagePath = path.join(testDir, "screen.png");
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
 		const stub = createCompleteSimpleSuccessStub("Detected text: Settings");
-		const tool = new InspectImageTool(createSession(testDir, visionModel), stub.fn);
+		const tool = new ReadTool(createSession(testDir, visionModel), stub.fn);
 		const result = await tool.execute("call-1", {
 			path: imagePath,
 			question: "Extract visible UI labels.",
@@ -135,74 +131,34 @@ describe("InspectImageTool", () => {
 		expect(stub.calls).toHaveLength(1);
 
 		const request = stub.calls[0]?.[1] as { messages?: Array<{ content?: unknown }> } | undefined;
-		const userMessage = request?.messages?.[0];
-		const content = userMessage?.content;
+		const content = request?.messages?.[0]?.content;
 		expect(Array.isArray(content)).toBe(true);
 		const contentParts = (Array.isArray(content) ? content : []) as Array<{ type: string; text?: string }>;
 		expect(contentParts[0]?.type).toBe("image");
 		expect(contentParts[1]).toEqual({ type: "text", text: "Extract visible UI labels." });
 	});
 
-	it("sends question text unchanged", async () => {
+	it("embeds the image when no question is provided", async () => {
 		const imagePath = path.join(testDir, "screen.png");
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-		const stub = createCompleteSimpleSuccessStub("Looks clear");
-		const tool = new InspectImageTool(createSession(testDir, visionModel), stub.fn);
-		await tool.execute("call-1b", { path: imagePath, question: "What warning is shown?" });
+		const stub = createCompleteSimpleForbiddenStub();
+		const tool = new ReadTool(createSession(testDir, visionModel), stub.fn);
+		const result = await tool.execute("call-embed", { path: imagePath });
 
-		const request = stub.calls[0]?.[1] as { messages?: Array<{ content?: unknown }> } | undefined;
-		const userMessage = request?.messages?.[0];
-		const content = userMessage?.content;
-		const contentParts = (Array.isArray(content) ? content : []) as Array<{ type: string; text?: string }>;
-		expect(contentParts[1]).toEqual({ type: "text", text: "What warning is shown?" });
+		expect((result.content as Array<{ type: string }>).some(c => c.type === "image")).toBe(true);
+		expect(stub.calls).toHaveLength(0);
 	});
 
-	it("registers custom renderer and shows question in terminal output", async () => {
-		const theme = await getThemeByName("red-claw");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
-		expect(toolRenderers.inspect_image).toBeDefined();
+	it("records the resolved vision model in details", async () => {
+		const imagePath = path.join(testDir, "screen.png");
+		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-		const callComponent = inspectImageToolRenderer.renderCall(
-			{ path: "/tmp/screenshot.png", question: "What error text is visible?" },
-			{ expanded: false, isPartial: false },
-			uiTheme,
-		);
-		const callOutput = sanitizeText(callComponent.render(100).join("\n"));
-		expect(callOutput).toContain("Inspect Image");
-		expect(callOutput).toContain("Question:");
-		expect(callOutput).toContain("What error text is visible?");
+		const stub = createCompleteSimpleSuccessStub("ok");
+		const tool = new ReadTool(createSession(testDir, visionModel), stub.fn);
+		const result = await tool.execute("call-details", { path: imagePath, question: "What is visible?" });
 
-		const resultComponent = inspectImageToolRenderer.renderResult(
-			{
-				content: [{ type: "text", text: "line 1\nline 2\nline 3\nline 4\nline 5" }],
-				details: {
-					model: "openai/gpt-4o",
-					imagePath: "/tmp/screenshot.png",
-					mimeType: "image/png",
-				},
-			},
-			{ expanded: false, isPartial: false },
-			uiTheme,
-			{ path: "/tmp/screenshot.png", question: "What error text is visible?" },
-		);
-		const resultOutput = sanitizeText(resultComponent.render(100).join("\n"));
-		expect(resultOutput).toContain("Inspect Image");
-		expect(resultOutput).toContain("image/png");
-		expect(resultOutput).toContain("Question:");
-		expect(resultOutput).toContain("What error text is visible?");
-		expect(resultOutput).toContain("openai/gpt-4o");
-		expect(resultOutput).toContain("more lines");
-	});
-
-	it("schema rejects unknown parameters", () => {
-		const tool = new InspectImageTool(createSession(testDir, visionModel));
-		expect(tool.strict).toBe(false);
-		expect(tool.parameters.safeParse({ path: "img.png", question: "What is visible?" }).success).toBe(true);
-		expect(tool.parameters.safeParse({ path: "img.png", question: "What is visible?", extra: "nope" }).success).toBe(
-			false,
-		);
+		expect(result.details?.visionModel).toBe("openai/gpt-4o");
 	});
 
 	it("fails when images.blockImages is enabled", async () => {
@@ -211,7 +167,7 @@ describe("InspectImageTool", () => {
 
 		const stub = createCompleteSimpleForbiddenStub();
 		const settings = Settings.isolated({ "images.blockImages": true });
-		const tool = new InspectImageTool(createSession(testDir, visionModel, "test-key", settings), stub.fn);
+		const tool = new ReadTool(createSession(testDir, visionModel, "test-key", settings), stub.fn);
 
 		await expect(tool.execute("call-blocked", { path: imagePath, question: "What is visible?" })).rejects.toThrow(
 			/Image submission is disabled/i,
@@ -227,7 +183,7 @@ describe("InspectImageTool", () => {
 		settings.setModelRole("default", `${visionModel.provider}/${visionModel.id}`);
 
 		const stub = createCompleteSimpleSuccessStub("Fallback default model used");
-		const tool = new InspectImageTool(
+		const tool = new ReadTool(
 			createSession(testDir, textOnlyModel, "test-key", settings, {
 				configureVisionRole: false,
 				availableModels: [textOnlyModel, visionModel],
@@ -236,8 +192,8 @@ describe("InspectImageTool", () => {
 			stub.fn,
 		);
 
-		const result = await tool.execute("call-1c", { path: imagePath, question: "What text is visible?" });
-		expect(result.details?.model).toBe("openai/gpt-4o");
+		const result = await tool.execute("call-default", { path: imagePath, question: "What text is visible?" });
+		expect(result.details?.visionModel).toBe("openai/gpt-4o");
 		expect(stub.calls).toHaveLength(1);
 		const selectedModel = stub.calls[0]?.[0] as { id?: string } | undefined;
 		expect(selectedModel?.id).toBe("gpt-4o");
@@ -251,7 +207,7 @@ describe("InspectImageTool", () => {
 		settings.setModelRole("default", `${textOnlyModel.provider}/${textOnlyModel.id}`);
 
 		const stub = createCompleteSimpleForbiddenStub();
-		const tool = new InspectImageTool(
+		const tool = new ReadTool(
 			createSession(testDir, textOnlyModel, "test-key", settings, {
 				configureVisionRole: false,
 				availableModels: [textOnlyModel, visionModel],
@@ -274,7 +230,7 @@ describe("InspectImageTool", () => {
 		settings.setModelRole("vision", "openai/missing-vision-model");
 
 		const stub = createCompleteSimpleForbiddenStub();
-		const tool = new InspectImageTool(
+		const tool = new ReadTool(
 			createSession(testDir, visionModel, "test-key", settings, {
 				configureVisionRole: false,
 				availableModels: [visionModel],
@@ -295,7 +251,7 @@ describe("InspectImageTool", () => {
 
 		const settings = Settings.isolated();
 		const stub = createCompleteSimpleForbiddenStub();
-		const tool = new InspectImageTool(
+		const tool = new ReadTool(
 			createSession(testDir, visionModel, "test-key", settings, {
 				configureVisionRole: false,
 				availableModels: [visionModel],
@@ -306,7 +262,7 @@ describe("InspectImageTool", () => {
 
 		await expect(
 			tool.execute("call-no-registry-order-fallback", { path: imagePath, question: "What text is visible?" }),
-		).rejects.toThrow(/Unable to resolve a model for inspect_image/);
+		).rejects.toThrow(/Unable to resolve a model for image analysis/);
 		expect(stub.calls).toHaveLength(0);
 	});
 
@@ -319,7 +275,7 @@ describe("InspectImageTool", () => {
 		settings.setModelRole("vision", `${visionModel.provider}/${visionModel.id}`);
 
 		const stub = createCompleteSimpleSuccessStub("Configured vision fallback used");
-		const tool = new InspectImageTool(
+		const tool = new ReadTool(
 			createSession(testDir, visionModel, "test-key", settings, {
 				configureVisionRole: false,
 				availableModels: [textOnlyModel, visionModel],
@@ -330,8 +286,7 @@ describe("InspectImageTool", () => {
 
 		const result = await tool.execute("call-vision-role", { path: imagePath, question: "What text is visible?" });
 		expect(result.content).toEqual([{ type: "text", text: "Configured vision fallback used" }]);
-		expect((result.content as Array<{ type: string }>).some(c => c.type === "image")).toBe(false);
-		expect(result.details?.model).toBe("openai/gpt-4o");
+		expect(result.details?.visionModel).toBe("openai/gpt-4o");
 		expect(stub.calls).toHaveLength(1);
 		const selectedModel = stub.calls[0]?.[0] as { id?: string } | undefined;
 		expect(selectedModel?.id).toBe("gpt-4o");
@@ -342,7 +297,7 @@ describe("InspectImageTool", () => {
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
 		const stub = createCompleteSimpleForbiddenStub();
-		const tool = new InspectImageTool(createSession(testDir, textOnlyModel), stub.fn);
+		const tool = new ReadTool(createSession(testDir, textOnlyModel), stub.fn);
 
 		await expect(tool.execute("call-2", { path: imagePath, question: "What is visible?" })).rejects.toThrow(
 			/does not support image input/i,
@@ -355,7 +310,7 @@ describe("InspectImageTool", () => {
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
 		const stub = createCompleteSimpleForbiddenStub();
-		const tool = new InspectImageTool(createSession(testDir, visionModel, ""), stub.fn);
+		const tool = new ReadTool(createSession(testDir, visionModel, ""), stub.fn);
 
 		await expect(tool.execute("call-3", { path: imagePath, question: "What is visible?" })).rejects.toThrow(
 			/No API key available/i,
