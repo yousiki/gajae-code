@@ -1613,17 +1613,6 @@
 			},
 			"additionalProperties": false
 		},
-		"inspect_image": {
-			"type": "object",
-			"properties": {
-				"enabled": {
-					"type": "boolean",
-					"description": "Enable the inspect_image tool, delegating image understanding to a vision-capable model",
-					"default": false
-				}
-			},
-			"additionalProperties": false
-		},
 		"checkpoint": {
 			"type": "object",
 			"properties": {

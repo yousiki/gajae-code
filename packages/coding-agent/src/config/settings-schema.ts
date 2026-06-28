@@ -2071,16 +2071,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"inspect_image.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			label: "Inspect Image",
-			description: "Enable the inspect_image tool, delegating image understanding to a vision-capable model",
-		},
-	},
-
 	"checkpoint.enabled": {
 		type: "boolean",
 		default: false,
