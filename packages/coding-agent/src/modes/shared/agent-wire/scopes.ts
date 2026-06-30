@@ -74,6 +74,10 @@ const RPC_COMMAND_SCOPE_REGISTRY: Record<RpcCommandType, BridgeCommandScope> = {
 	get_login_providers: "admin",
 	login: "admin",
 	negotiate_unattended: "control",
+	get_unattended_audit: "message:read",
+	hindsight_recall: "message:read",
+	hindsight_reflect: "message:read",
+	hindsight_retain: "control",
 	workflow_gate_response: "control",
 };
 
