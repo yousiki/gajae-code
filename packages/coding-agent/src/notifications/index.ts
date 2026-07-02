@@ -30,6 +30,7 @@ import { logger } from "@gajae-code/utils";
 import { Settings } from "../config/settings";
 import type { ExtensionCommandContext, ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import { registerAskAnswerSource } from "../tools/ask-answer-registry";
+import { AppServerNotificationEndpoint } from "./app-server-endpoint";
 import { registerTelegramFileSink } from "./attachment-registry";
 import {
 	getNotificationConfig,
@@ -327,8 +328,10 @@ interface PendingInteractiveAsk {
 	options: string[];
 }
 
+type NotificationEndpoint = NotificationServer | AppServerNotificationEndpoint;
+
 interface SessionRuntime {
-	server: NotificationServer;
+	server: NotificationEndpoint;
 	idleSeq: number;
 	/** Interactive asks awaiting a remote answer, by action id. */
 	pendingInteractive: Map<string, PendingInteractiveAsk>;
@@ -443,7 +446,7 @@ function mapAnswerToGate(
  * races the local UI against a remote reply). Returns the deregister disposer. */
 function registerInteractiveAnswerSource(
 	id: string,
-	server: NotificationServer,
+	server: NotificationEndpoint,
 	pendingInteractive: Map<string, PendingInteractiveAsk>,
 	getRedact: () => boolean,
 	tag: string,
@@ -547,7 +550,15 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 
 		// The SDK can always answer now (interactive via the answer source, or the
 		// unattended gate), so the endpoint advertises a resolver.
-		const server = new NotificationServer(id, resolveToken(), stateRoot, true);
+		const server: NotificationEndpoint =
+			process.env.GJC_NOTIFICATIONS_APP_SERVER === "1"
+				? new AppServerNotificationEndpoint({
+						sessionId: id,
+						// TODO(phase7): wire this to the app-server handle once the native
+						// AppServerHandle.pushNotification surface lands in the extension.
+						pushNotification: frame => logger.debug(`notifications app-server frame: ${JSON.stringify(frame)}`),
+					})
+				: new NotificationServer(id, resolveToken(), stateRoot, true);
 
 		server.onReply((err, reply) => {
 			if (err || !reply) return;
