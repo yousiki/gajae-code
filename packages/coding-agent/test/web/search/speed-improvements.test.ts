@@ -27,6 +27,7 @@ import {
 } from "../../../src/web/search/provider";
 import type { SearchParams } from "../../../src/web/search/providers/base";
 import {
+	applyConfiguredSearchTimeout,
 	SEARCH_API_TIMEOUT_MS,
 	SEARCH_HARD_TIMEOUT_MS,
 	SEARCH_LLM_TIMEOUT_MS,
@@ -62,6 +63,54 @@ describe("per-class hard timeouts", () => {
 	});
 
 	it("does not abort a class-tagged signal immediately without an override", async () => {
+		const signal = withHardTimeout(undefined, "api");
+		await Bun.sleep(30);
+		expect(signal.aborted).toBe(false);
+	});
+});
+
+describe("applyConfiguredSearchTimeout (settings initialization path)", () => {
+	afterEach(() => setSearchHardTimeoutMs(undefined));
+
+	function settingsSource(explicit: boolean, value: unknown) {
+		return {
+			get: () => value as number,
+			has: () => explicit,
+		};
+	}
+
+	it("does NOT install the schema default as a global override", async () => {
+		// Regression for the review blocker: settings.get("web_search.timeout")
+		// returns the schema default (300) even when the user never configured
+		// it. Consuming that value unconditionally would reinstall the uniform
+		// 300s ceiling and kill the per-class defaults on every real session.
+		applyConfiguredSearchTimeout(settingsSource(false, 300));
+		const signal = withHardTimeout(undefined, "api");
+		await Bun.sleep(30);
+		// Un-overridden api-class signals must stay open well past any
+		// wrongly-installed millisecond-scale override.
+		expect(signal.aborted).toBe(false);
+	});
+
+	it("installs an explicitly configured timeout as the override", async () => {
+		applyConfiguredSearchTimeout(settingsSource(true, 0.01)); // 10ms
+		const apiSignal = withHardTimeout(undefined, "api");
+		const llmSignal = withHardTimeout(undefined, "llm");
+		await Bun.sleep(50);
+		expect(apiSignal.aborted).toBe(true);
+		expect(llmSignal.aborted).toBe(true);
+	});
+
+	it("clears a previous override when the setting is no longer explicitly configured", async () => {
+		applyConfiguredSearchTimeout(settingsSource(true, 0.01));
+		applyConfiguredSearchTimeout(settingsSource(false, 300));
+		const signal = withHardTimeout(undefined, "api");
+		await Bun.sleep(30);
+		expect(signal.aborted).toBe(false);
+	});
+
+	it("ignores invalid explicit values instead of installing them", async () => {
+		applyConfiguredSearchTimeout(settingsSource(true, -5));
 		const signal = withHardTimeout(undefined, "api");
 		await Bun.sleep(30);
 		expect(signal.aborted).toBe(false);
@@ -124,6 +173,31 @@ describe("resolved-chain caching", () => {
 		await resolveProviderChain({ authStorage: a.storage, activeModelContext: { ...ctx } });
 		await resolveProviderChain({ authStorage: b.storage, activeModelContext: { ...ctx } });
 		expect(b.probeCount()).toBeGreaterThan(0);
+	});
+
+	it("invalidates cached chains when the AuthStorage generation changes", async () => {
+		let probes = 0;
+		let generation = 1;
+		const storage = {
+			hasAuth: () => false,
+			hasOAuth: () => false,
+			getOAuthAccess: () => undefined,
+			getGeneration: () => generation,
+			getApiKey: async () => {
+				probes++;
+				return "sk-test";
+			},
+		} as unknown as AuthStorage;
+
+		await resolveProviderChain({ authStorage: storage, activeModelContext: { ...ctx } });
+		const probesAfterFirst = probes;
+		// Same generation: cache hit, no new probes.
+		await resolveProviderChain({ authStorage: storage, activeModelContext: { ...ctx } });
+		expect(probes).toBe(probesAfterFirst);
+		// Credential change (login/logout) bumps the generation: re-probe.
+		generation = 2;
+		await resolveProviderChain({ authStorage: storage, activeModelContext: { ...ctx } });
+		expect(probes).toBeGreaterThan(probesAfterFirst);
 	});
 
 	it("does not share cache entries across different model contexts", async () => {

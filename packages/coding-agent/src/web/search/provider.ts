@@ -164,8 +164,14 @@ function chainCacheKey(
 	preferred: SearchProviderId | "auto" | undefined,
 	fallbacks: readonly SearchProviderId[],
 	ctx: ActiveSearchModelContext | undefined,
+	authStorage: AuthStorage,
 ): string {
+	// Include the AuthStorage generation so credential changes (login/logout,
+	// key rotation) invalidate cached chains immediately instead of being
+	// masked for up to the TTL. Stubs without getGeneration() key as 0.
+	const generation = (authStorage as { getGeneration?: () => number }).getGeneration?.() ?? 0;
 	return JSON.stringify([
+		generation,
 		preferred ?? null,
 		fallbacks,
 		ctx
@@ -403,7 +409,7 @@ export async function resolveProviderChain(options: ResolveProviderChainOptions)
 		fallbackProviders = fallbackProvIds,
 	} = options;
 
-	const cacheKey = chainCacheKey(preferredProvider, fallbackProviders, activeModelContext);
+	const cacheKey = chainCacheKey(preferredProvider, fallbackProviders, activeModelContext, authStorage);
 	const perStorage = chainCache.get(authStorage);
 	const cached = perStorage?.get(cacheKey);
 	if (cached && cached.expires > Date.now()) {

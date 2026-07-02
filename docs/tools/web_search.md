@@ -217,9 +217,9 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
 - Perplexity API-key mode defaults: `max_tokens = 8192`, `temperature = 0.2`, `num_search_results = 10` (`packages/coding-agent/src/web/search/providers/perplexity.ts`).
 - Anthropic defaults: model `anthropic-model-haiku-4-5`, `DEFAULT_MAX_TOKENS = 4096` when the provider omits `max_tokens` (`packages/coding-agent/src/web/search/providers/anthropic.ts`).
 - Gemini retries: up to `3` retries per endpoint, base delay `1000` ms, rate-limit delay budget `30 * 1000` ms (`packages/coding-agent/src/web/search/providers/gemini.ts`).
-- Hard timeouts are class-based (`packages/coding-agent/src/web/search/providers/utils.ts`): pure search APIs `SEARCH_API_TIMEOUT_MS = 15_000`, LLM-mediated providers `SEARCH_LLM_TIMEOUT_MS = 120_000`, legacy fallback `SEARCH_HARD_TIMEOUT_MS = 300_000` for untagged call sites. A user-configured `web_search.timeout` overrides class defaults.
+- Hard timeouts are class-based (`packages/coding-agent/src/web/search/providers/utils.ts`): pure search APIs `SEARCH_API_TIMEOUT_MS = 15_000`, LLM-mediated providers `SEARCH_LLM_TIMEOUT_MS = 120_000`, legacy fallback `SEARCH_HARD_TIMEOUT_MS = 300_000` for untagged call sites. Kimi uses an explicit `KIMI_HARD_TIMEOUT_MS = 35_000` aligned with its upstream `timeout_seconds: 30` budget. An explicitly configured `web_search.timeout` overrides class defaults (`applyConfiguredSearchTimeout()` gates on `settings.has`, so the schema default 300 does not reinstall a uniform ceiling).
 - DuckDuckGo hedge delay: `DDG_HEDGE_DELAY_MS = 3_000` (`packages/coding-agent/src/web/search/index.ts`).
-- Resolved provider chains are cached per `AuthStorage` instance for `CHAIN_CACHE_TTL_MS = 60_000`; `setPreferredSearchProvider()` / `setSearchFallbackProviders()` clear the cache (`packages/coding-agent/src/web/search/provider.ts`).
+- Resolved provider chains are cached per `AuthStorage` instance for `CHAIN_CACHE_TTL_MS = 60_000`, keyed on the storage credential generation so login/logout invalidates immediately; `setPreferredSearchProvider()` / `setSearchFallbackProviders()` clear the cache (`packages/coding-agent/src/web/search/provider.ts`).
 
 ## Errors
 - There is no "no provider configured" case: DuckDuckGo (keyless) is always appended as the terminal fallback, so the chain is never empty.

@@ -216,7 +216,7 @@ async function executeSearch(
 	const onUpstreamAbort = () => hedgeCtl.abort();
 	signal?.addEventListener("abort", onUpstreamAbort, { once: true });
 	let hedgePromise: Promise<SearchResponse> | undefined;
-	let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+	let hedgeTimer: NodeJS.Timeout | undefined;
 	if (ddgIndex > 0) {
 		const ddg = providers[ddgIndex]!;
 		hedgeTimer = setTimeout(() => {
@@ -407,6 +407,6 @@ export {
 	setPreferredSearchProvider,
 	setSearchFallbackProviders,
 } from "./provider";
-export { setSearchHardTimeoutMs } from "./providers/utils";
+export { applyConfiguredSearchTimeout, setSearchHardTimeoutMs } from "./providers/utils";
 export type { SearchProviderId as SearchProvider, SearchResponse } from "./types";
 export { isConfigurableSearchProviderId, isSearchProviderPreference } from "./types";

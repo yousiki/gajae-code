@@ -119,6 +119,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
 import { collectDiscoverableTools, type DiscoverableTool } from "./tool-discovery/tool-index";
 import {
+	applyConfiguredSearchTimeout,
 	BashTool,
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
@@ -140,7 +141,6 @@ import {
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	setSearchFallbackProviders,
-	setSearchHardTimeoutMs,
 	type Tool,
 	type ToolSession,
 	WebSearchTool,
@@ -940,10 +940,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			webSearchFallback.filter(value => typeof value === "string" && isConfigurableSearchProviderId(value)),
 		);
 	}
-	const webSearchTimeout = settings.get("web_search.timeout");
-	if (typeof webSearchTimeout === "number" && Number.isFinite(webSearchTimeout) && webSearchTimeout > 0) {
-		setSearchHardTimeoutMs(webSearchTimeout * 1000);
-	}
+	applyConfiguredSearchTimeout(settings);
 
 	const imageProvider = settings.get("providers.image");
 	if (

@@ -52,10 +52,11 @@ export function findCredential(
 export const SEARCH_HARD_TIMEOUT_MS = 300_000;
 
 /**
- * Hard ceiling for pure search APIs (brave, exa, jina, kimi, tavily, kagi,
+ * Hard ceiling for pure search APIs (brave, exa, jina, tavily, kagi,
  * parallel, searxng, synthetic, zai, duckduckgo). These settle in ~1-3s in
  * practice; a hung TCP/TLS connection should fall through to the next
- * provider in seconds, not minutes.
+ * provider in seconds, not minutes. Kimi is the exception: it declares an
+ * explicit ceiling aligned with its upstream 30s request budget.
  */
 export const SEARCH_API_TIMEOUT_MS = 15_000;
 
@@ -89,6 +90,29 @@ let configuredHardTimeoutMs: number | undefined;
  */
 export function setSearchHardTimeoutMs(ms: number | undefined): void {
 	configuredHardTimeoutMs = typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/** Structural settings source for {@link applyConfiguredSearchTimeout}. */
+export interface SearchTimeoutSettingSource {
+	get(path: "web_search.timeout"): unknown;
+	has(path: "web_search.timeout"): boolean;
+}
+
+/**
+ * Install the `web_search.timeout` override from settings — but only when the
+ * user explicitly configured it. The settings schema ships a default value
+ * (300), and consuming that default via `get()` alone would reinstall a
+ * uniform 300s ceiling on every session, silently disabling the per-class
+ * timeout defaults. `has()` distinguishes loaded/overridden settings from
+ * schema defaults; unset clears any previous override so class defaults apply.
+ */
+export function applyConfiguredSearchTimeout(settings: SearchTimeoutSettingSource): void {
+	if (!settings.has("web_search.timeout")) {
+		setSearchHardTimeoutMs(undefined);
+		return;
+	}
+	const value = settings.get("web_search.timeout");
+	setSearchHardTimeoutMs(typeof value === "number" && Number.isFinite(value) && value > 0 ? value * 1000 : undefined);
 }
 
 /**
