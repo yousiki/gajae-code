@@ -1,22 +1,17 @@
 /**
  * Session-level unattended control plane (#323 / G011 emission side).
  *
- * Bridges the gate EMISSION side (skill runtimes / ask tool emitting gates) to
- * the gate ANSWER side (the external agent's `workflow_gate_response` over RPC):
+ * Connects the gate EMISSION side (skill runtimes / ask tool emitting gates) to
+ * the gate ANSWER side (the external agent's `workflow_gate_response`):
  *
  *  - `emitGate(input)` opens a gate on the durable broker, emits the gate frame
  *    to the transport, and returns a promise that resolves with the agent's
  *    answer once it arrives.
- *  - `resolveGate(response)` (called from RPC dispatch) validates + resolves the
- *    gate on the broker; the broker's `advance` hook resolves the pending
- *    `emitGate` promise with the answer.
- *
- * Also implements the dispatch-facing {@link RpcUnattendedControlPlane} so the
- * RPC server can route `negotiate_unattended` + `workflow_gate_response` here.
+ *  - `resolveGate(response)` validates + resolves the gate on the broker; the
+ *    broker's `advance` hook resolves the pending `emitGate` promise with the
+ *    answer.
  */
 import type { Model } from "@gajae-code/ai";
-import type { RpcCommand } from "../../rpc/rpc-types";
-import type { RpcUnattendedControlPlane } from "./command-dispatch";
 import type {
 	RpcUnattendedAccepted,
 	RpcUnattendedDeclaration,
@@ -24,7 +19,7 @@ import type {
 	RpcWorkflowGateResolution,
 	RpcWorkflowGateResponse,
 } from "./protocol";
-import { scopeForRpcCommand } from "./scopes";
+import { type AgentWireCommandType, scopeForRpcCommand } from "./scopes";
 import {
 	type UnattendedAbortHooks,
 	type UnattendedAuditEvent,
@@ -32,12 +27,27 @@ import {
 } from "./unattended-run-controller";
 import { type GateStore, MemoryGateStore, type OpenGateInput, WorkflowGateBroker } from "./workflow-gate-broker";
 
+type AgentWireCommand = { type: AgentWireCommandType; [key: string]: unknown };
+
+export interface UnattendedControlPlane {
+	negotiate(declaration: RpcUnattendedDeclaration): RpcUnattendedAccepted;
+	resolveGate(response: RpcWorkflowGateResponse): Promise<RpcWorkflowGateResolution>;
+	listPendingGates(): RpcWorkflowGate[];
+	preflightCommand(command: AgentWireCommand): void;
+}
+
 /**
- * RPC commands that perform agent/tool work and therefore consume one unit of the
+ * Commands that perform agent/tool work and therefore consume one unit of the
  * `max_tool_calls` budget. Read-only/control/cancellation commands are wall-time-bounded
  * and scope-checked but must NOT charge the tool-call budget (issue 04).
  */
-const CHARGED_COMMAND_TYPES = new Set<RpcCommand["type"]>(["bash", "prompt", "steer", "follow_up", "abort_and_prompt"]);
+const CHARGED_COMMAND_TYPES = new Set<AgentWireCommandType>([
+	"bash",
+	"prompt",
+	"steer",
+	"follow_up",
+	"abort_and_prompt",
+]);
 
 /**
  * Derive an explicit `providerSupportsTokenCostMetrics` capability from the
@@ -85,7 +95,7 @@ export interface UnattendedSessionOptions {
 	getUsageSnapshot?: () => { tokens?: number; costUsd?: number };
 }
 
-export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane, WorkflowGateEmitter {
+export class UnattendedSessionControlPlane implements UnattendedControlPlane, WorkflowGateEmitter {
 	#controller: UnattendedRunController | undefined;
 	#broker: WorkflowGateBroker | undefined;
 	readonly #pending = new Map<string, { resolve: (answer: unknown) => void; reject: (err: Error) => void }>();
@@ -151,7 +161,7 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 		};
 	}
 
-	preflightCommand(command: RpcCommand): void {
+	preflightCommand(command: AgentWireCommand): void {
 		if (!this.#controller) return;
 		const phase = `${command.type} preflight`;
 		// Always enforce wall-time; only charge the tool-call budget for commands that perform
@@ -163,7 +173,7 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 			this.#controller.checkWallTime(phase);
 		}
 		if (command.type === "bash") {
-			this.#controller.authorizeBash(command.command);
+			this.#controller.authorizeBash(typeof command.command === "string" ? command.command : "");
 			return;
 		}
 		const scope = scopeForRpcCommand(command.type);
