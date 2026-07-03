@@ -15,15 +15,15 @@
  * RPC server can route `negotiate_unattended` + `workflow_gate_response` here.
  */
 import type { Model } from "@gajae-code/ai";
+import type { RpcCommand } from "../../rpc/rpc-types";
+import type { RpcUnattendedControlPlane } from "./command-dispatch";
 import type {
-	RpcCommand,
 	RpcUnattendedAccepted,
 	RpcUnattendedDeclaration,
 	RpcWorkflowGate,
 	RpcWorkflowGateResolution,
 	RpcWorkflowGateResponse,
-} from "../../rpc/rpc-types";
-import type { RpcUnattendedControlPlane } from "./command-dispatch";
+} from "./protocol";
 import { scopeForRpcCommand } from "./scopes";
 import {
 	type UnattendedAbortHooks,
@@ -196,7 +196,7 @@ export class UnattendedSessionControlPlane implements RpcUnattendedControlPlane,
 		return this.#broker.resolve(response);
 	}
 
-	listPendingGates(): import("../../rpc/rpc-types").RpcWorkflowGate[] {
+	listPendingGates(): import("./protocol").RpcWorkflowGate[] {
 		const store = this.opts.store;
 		if (!store) return [];
 		return store
