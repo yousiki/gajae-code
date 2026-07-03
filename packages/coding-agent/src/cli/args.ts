@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { parseEffort } from "../thinking";
 import { BUILTIN_TOOLS } from "../tools";
 
-export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui" | "bridge" | "app-server";
+export type Mode = "text" | "json" | "acp" | "app-server";
 
 export interface Args {
 	cwd?: string;
@@ -30,7 +30,6 @@ export interface Args {
 	mode?: Mode;
 	noSession?: boolean;
 	sessionDir?: string;
-	rpcListen?: string;
 	providerSessionId?: string;
 	fork?: string;
 	models?: string[];
@@ -99,15 +98,7 @@ export function parseArgs(args: string[]): Args {
 			result.allowHome = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (
-				mode === "text" ||
-				mode === "json" ||
-				mode === "rpc" ||
-				mode === "acp" ||
-				mode === "rpc-ui" ||
-				mode === "bridge" ||
-				mode === "app-server"
-			) {
+			if (mode === "text" || mode === "json" || mode === "acp" || mode === "app-server") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {
@@ -147,8 +138,6 @@ export function parseArgs(args: string[]): Args {
 			result.noSession = true;
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
 			result.sessionDir = args[++i];
-		} else if (arg === "--listen" && i + 1 < args.length) {
-			result.rpcListen = args[++i];
 		} else if (arg === "--models" && i + 1 < args.length) {
 			result.models = args[++i].split(",").map(s => s.trim());
 		} else if (arg === "--no-tools") {
