@@ -375,12 +375,12 @@
 						"all"
 					],
 					"description": "Hide non-essential built-in tools behind a search tool to save tokens.",
-					"default": "off"
+					"default": "all"
 				},
 				"essentialOverride": {
 					"type": "array",
 					"items": true,
-					"description": "Override the always-loaded built-in tools (default: read, bash, edit). Leave empty to use defaults.",
+					"description": "Override the always-loaded built-in tools (default: read, bash, edit, write, search, find). Leave empty to use defaults.",
 					"default": []
 				}
 			},

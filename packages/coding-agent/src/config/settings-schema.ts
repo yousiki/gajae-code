@@ -2493,7 +2493,7 @@ export const SETTINGS_SCHEMA = {
 	"tools.discoveryMode": {
 		type: "enum",
 		values: ["off", "all"] as const,
-		default: "off",
+		default: "all",
 		ui: {
 			tab: "tools",
 			label: "Tool Discovery",
@@ -2508,7 +2508,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Essential Tools Override",
 			description:
-				"Override the always-loaded built-in tools (default: read, bash, edit). Leave empty to use defaults.",
+				"Override the always-loaded built-in tools (default: read, bash, edit, write, search, find). Leave empty to use defaults.",
 		},
 	},
 

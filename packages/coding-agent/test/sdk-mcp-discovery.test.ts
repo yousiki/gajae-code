@@ -153,7 +153,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 		const prompt = session.systemPrompt.join("\n");
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
-		expect(session.getActiveToolNames()).not.toContain("find");
+		expect(session.getActiveToolNames()).not.toContain("subagent");
 		expect(prompt).toContain("SearchTools: `search_tool_bm25`");
 		expect(searchTool?.description).toContain("Search hidden tool metadata");
 		expect(searchTool?.description).toContain("total_tools");
@@ -302,15 +302,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 				enableLsp: false,
 			});
 
-			expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
-			expect(session.getSelectedDiscoveredToolNames()).toContain("find");
+			expect(await session.activateDiscoveredTools(["subagent"])).toEqual(["subagent"]);
+			expect(session.getSelectedDiscoveredToolNames()).toContain("subagent");
 
 			await session.setActiveToolsByName(["read", "search_tool_bm25"]);
 
-			expect(session.getActiveToolNames()).not.toContain("find");
-			expect(session.getSelectedDiscoveredToolNames()).not.toContain("find");
-			expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
-			expect(session.getActiveToolNames()).toContain("find");
+			expect(session.getActiveToolNames()).not.toContain("subagent");
+			expect(session.getSelectedDiscoveredToolNames()).not.toContain("subagent");
+			expect(await session.activateDiscoveredTools(["subagent"])).toEqual(["subagent"]);
+			expect(session.getActiveToolNames()).toContain("subagent");
 		},
 		SLOW_SDK_TEST_TIMEOUT_MS,
 	);

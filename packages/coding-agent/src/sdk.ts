@@ -1816,6 +1816,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				intentField,
 				mcpDiscoveryMode: false,
 				mcpDiscoveryServerSummaries: [],
+				toolDiscoveryActive: effectiveDiscoveryMode === "all",
+				discoverableTools: discoverableBuiltinTools
+					.map(tool => ({ name: tool.name, summary: tool.summary }))
+					.sort((a, b) => a.name.localeCompare(b.name)),
 				eagerTasks,
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,

@@ -64,9 +64,6 @@ Use for read-only plan critique. It approves only when execution can proceed wit
 - The runtime records a `workflow-intent-diff` CustomEntry for direct-path traceability; it does not participate in LLM context and is not a reason to slow down direct execution.
 - When a task is clear, bounded, and low-risk, the default action is to make the smallest correct change and verify it, not to interview, plan, open a durable ledger, or delegate.
 - Small verification needs do not make a task a planning workflow. Escalate only for real ambiguity, non-trivial architecture/sequence risk, durable multi-goal tracking, or useful coordinated workers.
-- Ambiguous requirements → use `deep-interview` before planning or execution.
-- Architecture/sequence risk → use `ralplan --deliberate` and stop at pending approval.
-- Durable tracking needed → use `ultragoal`; if no approved plan exists, run `ralplan` first.
 - Root-cause phase schema is active only for contradiction, regression, or high-risk transition work; otherwise keep ordinary verification and do not add root-cause ceremony.
 - Vague requirements → use `deep-interview` before planning or execution.
 - Clear requirements but non-trivial architecture/sequence risk → use `ralplan --deliberate` and stop at pending approval.
@@ -142,6 +139,18 @@ Use tools whenever they materially improve correctness, completeness, or groundi
 {{/each}}
 {{/if}}
 </inventory>
+{{/if}}
+
+{{#if toolDiscoveryActive}}
+<tool-discovery>
+Only essential tools are loaded up front; other tools are hidden to save context and are available on demand. Call `{{toolRefs.search_tool_bm25}}` with a short natural-language query to find and activate the tool you need, then call it. Prefer discovering a purpose-built tool over forcing the task onto a resident one.
+{{#if discoverableTools.length}}
+Discoverable tools:
+{{#each discoverableTools}}
+- `{{name}}`{{#if summary}} — {{summary}}{{/if}}
+{{/each}}
+{{/if}}
+</tool-discovery>
 {{/if}}
 
 <inputs>
