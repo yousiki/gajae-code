@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@gajae-code/tui",
-	"version": "0.7.11",
+	"version": "1.0.0-beta",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"homepage": "https://gaebal-gajae.dev",
 	"author": "Yeachan-Heo",
@@ -38,8 +38,8 @@
 		"fmt": "biome format --write ."
 	},
 	"dependencies": {
-		"@gajae-code/natives": "catalog:",
-		"@gajae-code/utils": "catalog:",
+		"@gajae-code/natives": "^1.0.0-beta",
+		"@gajae-code/utils": "^1.0.0-beta",
 		"lru-cache": "catalog:",
 		"marked": "catalog:"
 	},
