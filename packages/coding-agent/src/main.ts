@@ -37,6 +37,7 @@ import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
+import { applyCliRuntimeApiKeyOverride } from "./runtime-api-key";
 import type { MCPManager } from "./runtime-mcp";
 import {
 	type CreateAgentSessionOptions,
@@ -296,9 +297,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			startupModel: args.baseOptions.model,
 			startupThinkingLevel: args.baseOptions.thinkingLevel,
 		});
-		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
-			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
-		}
+		applyCliRuntimeApiKeyOverride(args.authStorage, args.parsedArgs.apiKey, nextSession.model);
 		applyExtensionFlagValues(nextSession, args.rawArgs);
 		return nextSession;
 	};
@@ -969,9 +968,7 @@ export async function runRootCommand(
 			);
 			process.exit(1);
 		}
-		if (sessionOptions.model) {
-			authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsedArgs.apiKey);
-		}
+		applyCliRuntimeApiKeyOverride(authStorage, parsedArgs.apiKey, sessionOptions.model);
 	}
 
 	const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
@@ -1004,9 +1001,7 @@ export async function runRootCommand(
 			sessionOptions,
 			{ skipPostCreateModelRefresh: hasRootStartupProfile },
 		);
-		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
-			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
-		}
+		applyCliRuntimeApiKeyOverride(authStorage, parsedArgs.apiKey, session.model);
 
 		// Research-mode (RLM) preset: hard tool-boundary assertion after the registry is assembled.
 		if (deps.rlmPreset?.onSessionCreated) {
