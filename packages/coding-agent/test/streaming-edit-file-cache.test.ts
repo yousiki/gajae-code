@@ -1,17 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Agent, type AgentTool } from "@gajae-code/agent-core";
-import { getBundledModel, type AssistantMessage, type StopReason, type ToolCall } from "@gajae-code/ai";
+import { type AssistantMessage, getBundledModel, type StopReason, type ToolCall } from "@gajae-code/ai";
 import { AssistantMessageEventStream } from "@gajae-code/ai/utils/event-stream";
-import { MAX_EDIT_FILE_BYTES } from "@gajae-code/coding-agent/edit/read-file";
 import { ModelRegistry } from "@gajae-code/coding-agent/config/model-registry";
 import { Settings } from "@gajae-code/coding-agent/config/settings";
+import { MAX_EDIT_FILE_BYTES } from "@gajae-code/coding-agent/edit/read-file";
 import { AgentSession, StreamingEditFileCache } from "@gajae-code/coding-agent/session/agent-session";
 import { AuthStorage } from "@gajae-code/coding-agent/session/auth-storage";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
 import { Snowflake } from "@gajae-code/utils";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import * as z from "zod/v4";
 
 function createAssistantMessage(content: AssistantMessage["content"], stopReason: StopReason): AssistantMessage {
@@ -76,15 +76,29 @@ function createStreamForDiff(filePath: string, diff: string): Agent["streamFn"] 
 		const stream = new AssistantMessageEventStream();
 		queueMicrotask(() => {
 			if (callIndex > 0) {
-				stream.push({ type: "done", reason: "stop", message: createAssistantMessage([{ type: "text", text: "done" }], "stop") });
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "done" }], "stop"),
+				});
 				return;
 			}
 
 			const toolCall = createToolCall("call_edit_1", { path: filePath, diff });
 			stream.push({ type: "start", partial: createAssistantMessage([], "stop") });
 			stream.push({ type: "toolcall_start", contentIndex: 0, partial: createAssistantMessage([toolCall], "stop") });
-			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: diff, partial: createAssistantMessage([toolCall], "stop") });
-			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: createAssistantMessage([toolCall], "toolUse") });
+			stream.push({
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: diff,
+				partial: createAssistantMessage([toolCall], "stop"),
+			});
+			stream.push({
+				type: "toolcall_end",
+				contentIndex: 0,
+				toolCall,
+				partial: createAssistantMessage([toolCall], "toolUse"),
+			});
 			stream.push({ type: "done", reason: "toolUse", message: createAssistantMessage([toolCall], "toolUse") });
 			callIndex++;
 		});

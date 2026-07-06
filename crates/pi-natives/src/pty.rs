@@ -10,7 +10,11 @@ use std::{
 	collections::HashMap,
 	io::{Read, Write},
 	str,
-	sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}, mpsc},
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicU64, Ordering},
+		mpsc,
+	},
 	time::{Duration, Instant},
 };
 

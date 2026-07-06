@@ -272,7 +272,6 @@ function streamFromLazyImport(
 	return outer;
 }
 
-
 /**
  * Build an actionable "missing API key" error for a provider, used by the
  * low-level `stream`/`complete` entry points (#755).
@@ -299,13 +298,16 @@ export function stream<TApi extends Api>(
 		if (!apiKey) {
 			throw new Error(formatMissingApiKeyError(model.provider));
 		}
-		return streamFromLazyImport(async () => {
-			const { streamGitLabDuo } = await import("./providers/gitlab-duo");
-			return streamGitLabDuo(model, context, {
-				...(options as SimpleStreamOptions | undefined),
-				apiKey,
-			});
-		}, (options as StreamOptions | undefined)?.signal);
+		return streamFromLazyImport(
+			async () => {
+				const { streamGitLabDuo } = await import("./providers/gitlab-duo");
+				return streamGitLabDuo(model, context, {
+					...(options as SimpleStreamOptions | undefined),
+					apiKey,
+				});
+			},
+			(options as StreamOptions | undefined)?.signal,
+		);
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys

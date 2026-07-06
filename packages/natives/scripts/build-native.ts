@@ -154,7 +154,11 @@ export function resolveNativeBuildProfile(options: {
 	explicitProfile?: string;
 }): NativeBuildProfile {
 	if (options.explicitProfile !== undefined && options.explicitProfile !== "") {
-		if (options.explicitProfile === "local" || options.explicitProfile === "ci" || options.explicitProfile === "dist") {
+		if (
+			options.explicitProfile === "local" ||
+			options.explicitProfile === "ci" ||
+			options.explicitProfile === "dist"
+		) {
 			return options.explicitProfile;
 		}
 		throw new Error(`Unsupported PI_NATIVE_PROFILE: ${options.explicitProfile}. Expected "local", "ci", or "dist".`);

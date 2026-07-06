@@ -10,7 +10,11 @@ async function runBunEval(source: string, env: Record<string, string> = {}): Pro
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
 	if (exitCode !== 0) {
 		throw new Error(`bun -e failed with exit ${exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 	}
@@ -51,7 +55,7 @@ describe("startup imports", () => {
 
 	it("buffers the first synchronous log write until winston transports are ready", async () => {
 		const logDir = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-logger-startup-"));
-		const source = String.raw`
+		const source = `
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "./packages/utils/src/index.ts";

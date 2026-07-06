@@ -1,6 +1,6 @@
 import type { HTMLElement } from "linkedom";
-import { parseHtmlLazy } from "../../utils/linkedom";
 import { ToolAbortError } from "../../tools/tool-errors";
+import { parseHtmlLazy } from "../../utils/linkedom";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, loadPage } from "./types";
 

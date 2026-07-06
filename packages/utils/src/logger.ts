@@ -74,10 +74,7 @@ function makeLogFormat(winston: WinstonModule): winston.Logform.Format {
 }
 
 /** Build a rotating file transport, materializing the target directory lazily. */
-function makeFileTransport(
-	DailyRotateFile: DailyRotateFileCtor,
-	dir?: string,
-): Transport {
+function makeFileTransport(DailyRotateFile: DailyRotateFileCtor, dir?: string): Transport {
 	return new DailyRotateFile({
 		dirname: ensureDir(dir ?? getLogsDir()),
 		filename: "gjc.%DATE%.log",
@@ -92,10 +89,18 @@ function makeConsoleTransport(winston: WinstonModule): Transport {
 	return new winston.transports.Console({ format: makeLogFormat(winston) });
 }
 
-function applyTransports(logger: Logger, modules: { winston: WinstonModule; DailyRotateFile: DailyRotateFileCtor }): void {
+function applyTransports(
+	logger: Logger,
+	modules: { winston: WinstonModule; DailyRotateFile: DailyRotateFileCtor },
+): void {
 	logger.clear();
 	if (transportOptions.file) {
-		logger.add(makeFileTransport(modules.DailyRotateFile, typeof transportOptions.file === "string" ? transportOptions.file : undefined));
+		logger.add(
+			makeFileTransport(
+				modules.DailyRotateFile,
+				typeof transportOptions.file === "string" ? transportOptions.file : undefined,
+			),
+		);
 	}
 	if (transportOptions.console) logger.add(makeConsoleTransport(modules.winston));
 }
@@ -170,11 +175,13 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
 	} else if (loggerInit) {
 		// Init in flight: re-apply once it settles so the new options can never
 		// be silently skipped by an ordering race inside the init closure.
-		void loggerInit.then(logger => {
-			if (winstonModule && dailyRotateFileCtor) {
-				applyTransports(logger, { winston: winstonModule, DailyRotateFile: dailyRotateFileCtor });
-			}
-		}).catch(() => {});
+		void loggerInit
+			.then(logger => {
+				if (winstonModule && dailyRotateFileCtor) {
+					applyTransports(logger, { winston: winstonModule, DailyRotateFile: dailyRotateFileCtor });
+				}
+			})
+			.catch(() => {});
 	}
 }
 

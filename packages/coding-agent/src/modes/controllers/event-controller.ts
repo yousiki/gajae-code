@@ -23,9 +23,8 @@ import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 import { buildAbortDisplayMessage } from "../utils/abort-message";
-import { addChatChild } from "../utils/ui-helpers";
 import { ringTerminalBell } from "../utils/terminal-bell";
-import { argsWithPartialJson } from "../utils/ui-helpers";
+import { addChatChild, argsWithPartialJson } from "../utils/ui-helpers";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 

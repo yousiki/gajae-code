@@ -273,8 +273,6 @@ export class AssistantMessageComponent extends Container {
 							),
 					),
 				});
-					),
-				});
 				continue;
 			}
 			const fallbackKey = `tool-image-fallback:${key}:${image.mimeType}`;

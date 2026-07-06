@@ -688,7 +688,8 @@ export class UiHelpers {
 	showNewVersionNotification(newVersion: string): void {
 		addChatChild(this.ctx, new Spacer(1));
 		addChatChild(this.ctx, new DynamicBorder(text => theme.fg("warning", text)));
-		addChatChild(this.ctx,
+		addChatChild(
+			this.ctx,
 			new Text(
 				theme.bold(theme.fg("warning", "Update Available")) +
 					"\n" +

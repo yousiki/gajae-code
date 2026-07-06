@@ -308,7 +308,12 @@ export async function runInteractiveBashPty(
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
 			const session = new PtySession();
-			const component = new BashInteractiveOverlayComponent(options.command, uiTheme, () => tui.terminal.rows, XtermTerminal);
+			const component = new BashInteractiveOverlayComponent(
+				options.command,
+				uiTheme,
+				() => tui.terminal.rows,
+				XtermTerminal,
+			);
 			component.setSession(session);
 			let finished = false;
 			const finalize = (run: PtyRunResult) => {

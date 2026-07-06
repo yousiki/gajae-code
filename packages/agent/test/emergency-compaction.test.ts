@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
 	emergencyCompactionReason,
-	resolveEmergencyCompactionLimits,
 	DEFAULT_EMERGENCY_COMPACTION_LIMITS as LIM,
+	resolveEmergencyCompactionLimits,
 } from "@gajae-code/agent-core/compaction";
 
 const under = { heapUsedBytes: 1, providerBytes: 1, messageCount: 1, imageBytes: 1 };
@@ -80,8 +80,12 @@ describe("emergencyCompactionReason (W4 / F6)", () => {
 
 		expect(smallLimits.heapUsedBytes).toBe(1024 * 1024 * 1024);
 		expect(largeLimits.heapUsedBytes).toBe(1_536 * 1024 * 1024);
-		expect(emergencyCompactionReason({ ...under, heapUsedBytes: smallLimits.heapUsedBytes + 1 }, smallLimits)).toBe("heap");
-		expect(emergencyCompactionReason({ ...under, heapUsedBytes: smallLimits.heapUsedBytes + 1 }, largeLimits)).toBeNull();
+		expect(emergencyCompactionReason({ ...under, heapUsedBytes: smallLimits.heapUsedBytes + 1 }, smallLimits)).toBe(
+			"heap",
+		);
+		expect(
+			emergencyCompactionReason({ ...under, heapUsedBytes: smallLimits.heapUsedBytes + 1 }, largeLimits),
+		).toBeNull();
 	});
 	it("falls back to the fixed 1.5 GiB floor on invalid total memory", () => {
 		const fullFloor = 1_536 * 1024 * 1024;
@@ -90,5 +94,4 @@ describe("emergencyCompactionReason (W4 / F6)", () => {
 		expect(resolveEmergencyCompactionLimits(Number.NaN).heapUsedBytes).toBe(fullFloor);
 		expect(resolveEmergencyCompactionLimits(Number.POSITIVE_INFINITY).heapUsedBytes).toBe(fullFloor);
 	});
-
 });

@@ -1,11 +1,8 @@
 import { afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
 import { initTheme } from "@gajae-code/coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@gajae-code/coding-agent/modes/types";
-import {
-	addChatChild,
-	CollapsedChatHistoryComponent,
-} from "@gajae-code/coding-agent/modes/utils/ui-helpers";
-import { Container, type Component } from "@gajae-code/tui";
+import { addChatChild, CollapsedChatHistoryComponent } from "@gajae-code/coding-agent/modes/utils/ui-helpers";
+import { type Component, Container } from "@gajae-code/tui";
 
 beforeAll(async () => {
 	await initTheme();
@@ -88,7 +85,9 @@ describe("interactive chat container cap", () => {
 		}
 
 		expect(ctx.chatContainer.children[0]).toBe(placeholder);
-		expect(ctx.chatContainer.children.filter(child => child instanceof CollapsedChatHistoryComponent)).toHaveLength(1);
+		expect(ctx.chatContainer.children.filter(child => child instanceof CollapsedChatHistoryComponent)).toHaveLength(
+			1,
+		);
 		expect(placeholder.count).toBe(600);
 		expect(ctx.chatContainer.children.length).toBeLessThanOrEqual(401);
 	});
@@ -128,5 +127,4 @@ describe("interactive chat container cap", () => {
 		expect(placeholder).toBeInstanceOf(CollapsedChatHistoryComponent);
 		expect((placeholder as CollapsedChatHistoryComponent).count).toBeGreaterThan(0);
 	});
-
 });

@@ -215,7 +215,7 @@ fn generate_svg(folded: &str) -> Result<Option<String>, &'static str> {
 }
 
 #[cfg(not(feature = "prof-flamegraph"))]
-fn generate_svg(_folded: &str) -> Result<Option<String>, &'static str> {
+const fn generate_svg(_folded: &str) -> Result<Option<String>, &'static str> {
 	Err("flamegraph SVG generation unavailable; rebuild with prof-flamegraph")
 }
 
@@ -246,7 +246,7 @@ pub fn get_work_profile(last_seconds: f64) -> WorkProfile {
 				summary.push_str("\n\n");
 				summary.push_str(message);
 				None
-			}
+			},
 		}
 	};
 

@@ -1147,7 +1147,7 @@ export function createNotificationsExtension(api: ExtensionAPI, options: { setti
 	api.on("message_update", (event, ctx) => {
 		const id = sessionId(ctx);
 		const rt = runtimes.get(id);
-		if (!rt || !rt.stream || rt.redact) return;
+		if (!rt?.stream || rt.redact) return;
 		if ((event.message as { role?: unknown }).role !== "assistant") return;
 		if (rt.liveRef === undefined) {
 			rt.turnSeq = (rt.turnSeq ?? 0) + 1;
