@@ -20,7 +20,9 @@ let providerNames: KnownProvider[] | undefined;
 const providerModelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
 
 function getBundledCatalog(): BundledCatalog {
-	bundledCatalog ??= require(process.env.PI_COMPILED === "true" ? COMPILED_MODELS_PATH : "./models.json") as BundledCatalog;
+	bundledCatalog ??= require(
+		process.env.PI_COMPILED === "true" ? COMPILED_MODELS_PATH : "./models.json",
+	) as BundledCatalog;
 	return bundledCatalog;
 }
 

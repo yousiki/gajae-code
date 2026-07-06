@@ -87,7 +87,6 @@ async function installRuntimeGlobals(): Promise<void> {
 	delete process.env.MallocStackLoggingNoCompact;
 }
 
-
 function isStatsHelpFastPath(argv: string[]): boolean {
 	return argv[0] === "stats" && (argv.includes("--help") || argv.includes("-h"));
 }
