@@ -151,6 +151,7 @@ import { onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
+import { MAX_EDIT_FILE_BYTES } from "../edit/read-file";
 import { disposeVmContextsByOwner } from "../eval/js/context-manager";
 import {
 	disposeKernelSessionsByOwner,
@@ -360,6 +361,11 @@ export interface AsyncJobSnapshot {
 // Types
 // ============================================================================
 
+export interface RetainedMemorySample {
+	tuiChatChildren?: number;
+	tuiCachedRenderBytes?: number;
+}
+
 export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
@@ -439,6 +445,8 @@ export interface AgentSessionConfig {
 	 * **MUST NOT** dispose it on their own teardown.
 	 */
 	ownedAsyncJobManager?: AsyncJobManager;
+	/** Cheap TUI retained-memory counters; absent for headless sessions. */
+	retainedMemorySampler?: () => RetainedMemorySample;
 	/**
 	 * MCPManager whose lifecycle this session owns (top-level sessions that
 	 * connected plugin-bundle MCP servers). Only the owned manager is
@@ -1082,6 +1090,68 @@ export function buildContextInjectionSignature(kind: string, parts: readonly str
 	}
 	return hash.digest("base64url");
 }
+
+const STREAMING_EDIT_FILE_CACHE_MAX_ENTRIES = 16;
+const STREAMING_EDIT_FILE_CACHE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
+
+type StreamingEditFileCacheEntry = {
+	content: string;
+	bytes: number;
+};
+
+export class StreamingEditFileCache {
+	#entries = new Map<string, StreamingEditFileCacheEntry>();
+	#totalBytes = 0;
+
+	get(path: string): string | undefined {
+		const entry = this.#entries.get(path);
+		if (entry === undefined) return undefined;
+		this.#entries.delete(path);
+		this.#entries.set(path, entry);
+		return entry.content;
+	}
+
+	set(path: string, content: string): void {
+		const bytes = Buffer.byteLength(content, "utf8");
+		if (bytes > MAX_EDIT_FILE_BYTES || bytes > STREAMING_EDIT_FILE_CACHE_MAX_TOTAL_BYTES) {
+			this.delete(path);
+			return;
+		}
+
+		this.delete(path);
+		while (
+			this.#entries.size >= STREAMING_EDIT_FILE_CACHE_MAX_ENTRIES ||
+			this.#totalBytes + bytes > STREAMING_EDIT_FILE_CACHE_MAX_TOTAL_BYTES
+		) {
+			const oldestPath = this.#entries.keys().next().value;
+			if (oldestPath === undefined) break;
+			this.delete(oldestPath);
+		}
+
+		this.#entries.set(path, { content, bytes });
+		this.#totalBytes += bytes;
+	}
+
+	delete(path: string): void {
+		const entry = this.#entries.get(path);
+		if (entry === undefined) return;
+		this.#entries.delete(path);
+		this.#totalBytes -= entry.bytes;
+	}
+
+	clear(): void {
+		this.#entries.clear();
+		this.#totalBytes = 0;
+	}
+
+	has(path: string): boolean {
+		return this.#entries.has(path);
+	}
+
+	get totalBytes(): number {
+		return this.#totalBytes;
+	}
+}
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -1146,6 +1216,7 @@ export class AgentSession {
 	#compactionAbortController: AbortController | undefined = undefined;
 	#autoCompactionAbortController: AbortController | undefined = undefined;
 	#resourceSampler: () => EmergencyCompactionSample = () => this.#defaultResourceSample();
+	#retainedMemorySampler: (() => RetainedMemorySample) | undefined;
 	#prePromptContextCheckPromise: Promise<void> | undefined = undefined;
 
 	// Branch summarization state
@@ -1319,7 +1390,7 @@ export class AgentSession {
 
 	#streamingEditPrecheckedToolCallIds = new Set<string>();
 
-	#streamingEditFileCache = new Map<string, string>();
+	#streamingEditFileCache = new StreamingEditFileCache();
 	readonly streamingEditDebugCounters = {
 		guardRuns: 0,
 		processedChars: 0,
@@ -1445,6 +1516,7 @@ export class AgentSession {
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
+		this.#retainedMemorySampler = config.retainedMemorySampler;
 		this.#ownedMcpManager = config.ownedMcpManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
@@ -3174,6 +3246,9 @@ export class AgentSession {
 		if (this.#streamingEditFileCache.has(resolvedPath)) return;
 
 		try {
+			const stat = fs.statSync(resolvedPath);
+			if (stat.size > MAX_EDIT_FILE_BYTES) return;
+
 			const rawText = fs.readFileSync(resolvedPath, "utf-8");
 			const { text } = stripBom(rawText);
 			this.#streamingEditFileCache.set(resolvedPath, normalizeToLF(text));
@@ -7706,9 +7781,14 @@ export class AgentSession {
 		this.#resourceSampler = sampler;
 	}
 
+	setRetainedMemorySampler(sampler: (() => RetainedMemorySample) | undefined): void {
+		this.#retainedMemorySampler = sampler;
+	}
+
 	#defaultResourceSample(): EmergencyCompactionSample {
 		let providerBytes = 0;
 		let imageBytes = 0;
+		const retainedMemory = this.#retainedMemorySampler?.() ?? {};
 		for (const message of this.state.messages) {
 			const content = (message as { content?: unknown }).content;
 			if (typeof content === "string") {
@@ -7730,6 +7810,10 @@ export class AgentSession {
 			providerBytes,
 			messageCount: this.state.messages.length,
 			imageBytes,
+			sessionResidentImageBytes: this.sessionManager.getResidentImageBytes(),
+			materializedResidentBytes: this.#streamingEditFileCache.totalBytes,
+			tuiChatChildren: retainedMemory.tuiChatChildren ?? 0,
+			tuiCachedRenderBytes: retainedMemory.tuiCachedRenderBytes ?? 0,
 		};
 	}
 

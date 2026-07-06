@@ -1455,6 +1455,8 @@ export interface PtyStartOptions {
   shell?: string
 }
 
+export declare function ptyTimeoutCount(): bigint
+
 /**
  * Read an image from the system clipboard.
  *

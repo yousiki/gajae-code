@@ -1,5 +1,5 @@
+import { createRequire } from "node:module";
 import type { HelperDelegate, HelperOptions, Template, TemplateDelegate } from "handlebars";
-import Handlebars from "handlebars";
 
 export type { HelperDelegate, HelperOptions, Template, TemplateDelegate };
 
@@ -223,8 +223,21 @@ export interface TemplateContext extends Record<string, unknown> {
 	arguments?: string;
 }
 
-const handlebars = Handlebars.create();
+type HandlebarsRuntime = typeof import("handlebars");
+type HandlebarsInstance = ReturnType<HandlebarsRuntime["create"]>;
 
+const require = createRequire(import.meta.url);
+let handlebars: HandlebarsInstance | undefined;
+
+function getHandlebars(): HandlebarsInstance {
+	if (handlebars) return handlebars;
+	const Handlebars = require("handlebars") as HandlebarsRuntime;
+	handlebars = Handlebars.create();
+	registerBuiltinHelpers(handlebars);
+	return handlebars;
+}
+
+function registerBuiltinHelpers(handlebars: HandlebarsInstance): void {
 handlebars.registerHelper("arg", function (this: TemplateContext, index: number | string): string {
 	const args = this.args ?? [];
 	const parsedIndex = typeof index === "number" ? index : Number.parseInt(index, 10);
@@ -241,7 +254,7 @@ handlebars.registerHelper("arg", function (this: TemplateContext, index: number 
  */
 handlebars.registerHelper(
 	"list",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
+	function (this: unknown, context: unknown[], options: HelperOptions): string {
 		if (!Array.isArray(context) || context.length === 0) return "";
 		const prefix = (options.hash.prefix as string) ?? "";
 		const suffix = (options.hash.suffix as string) ?? "";
@@ -282,7 +295,7 @@ handlebars.registerHelper(
  */
 handlebars.registerHelper(
 	"when",
-	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: Handlebars.HelperOptions): string {
+	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: HelperOptions): string {
 		const ops: Record<string, (a: unknown, b: unknown) => boolean> = {
 			"==": (a, b) => a === b,
 			"===": (a, b) => a === b,
@@ -304,7 +317,7 @@ handlebars.registerHelper(
  * True if any argument is truthy.
  */
 handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
+	const options = args.pop() as HelperOptions;
 	return args.some(Boolean) ? options.fn(this) : options.inverse(this);
 });
 
@@ -313,7 +326,7 @@ handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]):
  * True if all arguments are truthy.
  */
 handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
+	const options = args.pop() as HelperOptions;
 	return args.every(Boolean) ? options.fn(this) : options.inverse(this);
 });
 
@@ -323,7 +336,7 @@ handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]):
  */
 handlebars.registerHelper(
 	"table",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
+	function (this: unknown, context: unknown[], options: HelperOptions): string {
 		if (!Array.isArray(context) || context.length === 0) return "";
 		const headersStr = options.hash.headers as string | undefined;
 		const headers = headersStr?.split("|") ?? [];
@@ -338,7 +351,7 @@ handlebars.registerHelper(
  * {{#codeblock lang="diff"}}...{{/codeblock}}
  * Wraps content in a fenced code block.
  */
-handlebars.registerHelper("codeblock", function (this: unknown, options: Handlebars.HelperOptions): string {
+handlebars.registerHelper("codeblock", function (this: unknown, options: HelperOptions): string {
 	const lang = (options.hash.lang as string) ?? "";
 	const content = options.fn(this).trim();
 	return `\`\`\`${lang}\n${content}\n\`\`\``;
@@ -348,7 +361,7 @@ handlebars.registerHelper("codeblock", function (this: unknown, options: Handleb
  * {{#xml "tag"}}content{{/xml}}
  * Wraps content in XML-style tags. Returns empty string if content is empty.
  */
-handlebars.registerHelper("xml", function (this: unknown, tag: string, options: Handlebars.HelperOptions): string {
+handlebars.registerHelper("xml", function (this: unknown, tag: string, options: HelperOptions): string {
 	const content = options.fn(this).trim();
 	if (!content) return "";
 	return `<${tag}>\n${content}\n</${tag}>`;
@@ -391,7 +404,7 @@ handlebars.registerHelper("sub", (a: number, b: number): number => (a ?? 0) - (b
  */
 handlebars.registerHelper(
 	"has",
-	function (this: unknown, collection: unknown, item: unknown, options: Handlebars.HelperOptions): string {
+	function (this: unknown, collection: unknown, item: unknown, options: HelperOptions): string {
 		let found = false;
 		if (Array.isArray(collection)) {
 			found = collection.includes(item);
@@ -426,13 +439,14 @@ handlebars.registerHelper("includes", (collection: unknown, item: unknown): bool
 handlebars.registerHelper("not", (value: unknown): boolean => !value);
 
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
+}
 
 export function registerHelper(name: string, fn: HelperDelegate): void {
-	handlebars.registerHelper(name, fn);
+	getHandlebars().registerHelper(name, fn);
 }
 
 export function registerPartial(name: string, fn: Template): void {
-	handlebars.registerPartial(name, fn);
+	getHandlebars().registerPartial(name, fn);
 }
 
 /**
@@ -457,7 +471,7 @@ export function compile(template: string): (context: TemplateContext) => string 
 	const disambiguated = disambiguateClosingBraces(template);
 	const cached = compiledTemplateCache.get(disambiguated);
 	if (cached) return cached;
-	const compiled = handlebars.compile(disambiguated, { noEscape: true, strict: false }) as (
+	const compiled = getHandlebars().compile(disambiguated, { noEscape: true, strict: false }) as (
 		context: TemplateContext,
 	) => string;
 	compiledTemplateCache.set(disambiguated, compiled);

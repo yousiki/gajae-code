@@ -269,8 +269,10 @@ export class AssistantMessageComponent extends Container {
 								displayImage.data,
 								displayImage.mimeType,
 								{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
-								resolveImageOptions(),
+								{ ...resolveImageOptions(), refetch: () => displayImage.data },
 							),
+					),
+				});
 					),
 				});
 				continue;

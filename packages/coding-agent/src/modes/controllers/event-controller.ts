@@ -23,6 +23,7 @@ import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 import { buildAbortDisplayMessage } from "../utils/abort-message";
+import { addChatChild } from "../utils/ui-helpers";
 import { ringTerminalBell } from "../utils/terminal-bell";
 import { argsWithPartialJson } from "../utils/ui-helpers";
 
@@ -167,12 +168,12 @@ export class EventController {
 
 	#getReadGroup(): ReadToolGroupComponent {
 		if (!this.#lastReadGroup) {
-			this.ctx.chatContainer.addChild(new Text("", 0, 0));
+			addChatChild(this.ctx, new Text("", 0, 0));
 			const group = new ReadToolGroupComponent({
 				showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
 			});
 			group.setExpanded(this.ctx.toolOutputExpanded);
-			this.ctx.chatContainer.addChild(group);
+			addChatChild(this.ctx, group);
 			this.#lastReadGroup = group;
 		}
 		return this.#lastReadGroup;
@@ -325,7 +326,7 @@ export class EventController {
 				this.ctx.ui.requestRender(),
 			);
 			this.ctx.streamingMessage = event.message;
-			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
+			addChatChild(this.ctx, this.ctx.streamingComponent);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage, { streaming: true });
 			this.ctx.ui.requestRender();
 		}
@@ -438,7 +439,7 @@ export class EventController {
 				);
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resetReadGroup();
-					this.ctx.chatContainer.addChild(new Text("", 0, 0));
+					addChatChild(this.ctx, new Text("", 0, 0));
 					const tool = this.ctx.session.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
 						content.name,
@@ -455,8 +456,8 @@ export class EventController {
 						content.id,
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
-					this.ctx.chatContainer.addChild(component);
 					this.ctx.pendingTools.set(content.id, component);
+					addChatChild(this.ctx, component);
 				} else {
 					this.ctx.pendingTools.get(content.id)?.updateArgs(renderArgs, content.id);
 				}
@@ -568,8 +569,8 @@ export class EventController {
 				event.toolCallId,
 			);
 			component.setExpanded(this.ctx.toolOutputExpanded);
-			this.ctx.chatContainer.addChild(component);
 			this.ctx.pendingTools.set(event.toolCallId, component);
+			addChatChild(this.ctx, component);
 			this.ctx.ui.requestRender();
 		}
 	}
@@ -862,13 +863,13 @@ export class EventController {
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
 		const component = new TtsrNotificationComponent(event.rules);
 		component.setExpanded(this.ctx.toolOutputExpanded);
-		this.ctx.chatContainer.addChild(component);
+		addChatChild(this.ctx, component);
 		this.ctx.ui.requestRender();
 	}
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
 		const component = new TodoReminderComponent(event.todos, event.attempt, event.maxAttempts);
-		this.ctx.chatContainer.addChild(component);
+		addChatChild(this.ctx, component);
 		this.ctx.ui.requestRender();
 	}
 
