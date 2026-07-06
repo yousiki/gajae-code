@@ -3238,7 +3238,31 @@ export class AgentSession {
 		// which is the optional patch-preview verification gated by
 		// edit.streamingAbort. Skip the read when the setting is off.
 		if (this.settings.get("edit.streamingAbort")) {
-			this.#ensureFileCache(streamingEdit.resolvedPath);
+			// Fire-and-forget async priming: toolcall deltas arrive on the hot
+			// stream path, so never block it on filesystem I/O. The abort-check
+			// path (#maybeAbortStreamingEdit) still falls back to the sync read
+			// if priming hasn't completed by the time removed lines appear.
+			void this.#preCacheFileAsync(streamingEdit.resolvedPath);
+		}
+	}
+
+	#streamingEditPrecachePending = new Set<string>();
+	async #preCacheFileAsync(resolvedPath: string): Promise<void> {
+		if (this.#streamingEditFileCache.has(resolvedPath)) return;
+		if (this.#streamingEditPrecachePending.has(resolvedPath)) return;
+		this.#streamingEditPrecachePending.add(resolvedPath);
+		try {
+			const stat = await fs.promises.stat(resolvedPath);
+			if (stat.size > MAX_EDIT_FILE_BYTES) return;
+
+			const rawText = await fs.promises.readFile(resolvedPath, "utf-8");
+			if (this.#streamingEditFileCache.has(resolvedPath)) return;
+			const { text } = stripBom(rawText);
+			this.#streamingEditFileCache.set(resolvedPath, normalizeToLF(text));
+		} catch {
+			// Don't cache on read errors (including ENOENT) - let the edit tool handle them
+		} finally {
+			this.#streamingEditPrecachePending.delete(resolvedPath);
 		}
 	}
 
