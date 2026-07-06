@@ -227,14 +227,31 @@ type HandlebarsRuntime = typeof import("handlebars");
 type HandlebarsInstance = ReturnType<HandlebarsRuntime["create"]>;
 
 const require = createRequire(import.meta.url);
+const COMPILED_HANDLEBARS_PATH = "/$bunfs/root/node_modules/handlebars/lib/index.js";
 let handlebars: HandlebarsInstance | undefined;
 
 function getHandlebars(): HandlebarsInstance {
 	if (handlebars) return handlebars;
-	const Handlebars = require("handlebars") as HandlebarsRuntime;
+	const Handlebars = asHandlebarsRuntime(
+		require(process.env.PI_COMPILED === "true" ? COMPILED_HANDLEBARS_PATH : "handlebars"),
+	);
 	handlebars = Handlebars.create();
 	registerBuiltinHelpers(handlebars);
 	return handlebars;
+}
+
+function asHandlebarsRuntime(value: unknown): HandlebarsRuntime {
+	if (isHandlebarsRuntime(value)) return value;
+	if (isObjectRecord(value) && isHandlebarsRuntime(value.default)) return value.default;
+	throw new Error("Loaded handlebars module does not expose the expected runtime API.");
+}
+
+function isHandlebarsRuntime(value: unknown): value is HandlebarsRuntime {
+	return isObjectRecord(value) && typeof value.create === "function";
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 function registerBuiltinHelpers(handlebars: HandlebarsInstance): void {

@@ -24,6 +24,8 @@ export const releaseEntrypoints = [
 	"./packages/coding-agent/src/eval/js/worker-entry.ts",
 	"./packages/natives/native/index.js",
 	"./packages/coding-agent/src/notifications/telegram-daemon-cli.ts",
+	"./packages/ai/src/models.json",
+	"./node_modules/handlebars/lib/index.js",
 ];
 
 export const devEntrypoints = [
@@ -32,6 +34,8 @@ export const devEntrypoints = [
 	"./src/tools/browser/tab-worker-entry.ts",
 	"./src/eval/js/worker-entry.ts",
 	"./src/notifications/telegram-daemon-cli.ts",
+	"../ai/src/models.json",
+	"../../node_modules/handlebars/lib/index.js",
 ];
 
 export function buildReleaseCompileArgs(target: string, outfile: string): string[] {

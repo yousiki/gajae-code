@@ -27,13 +27,22 @@ describe("release build compile args", () => {
 		expect(releaseArgs).toContain("--minify");
 	});
 
-	it("includes worker entrypoints in release args", () => {
+	it("includes worker and lazy CommonJS entrypoints in release args", () => {
 		expect(releaseEntrypoints).toContain("./packages/stats/src/sync-worker.ts");
 		expect(releaseEntrypoints).toContain("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts");
 		expect(releaseEntrypoints).toContain("./packages/coding-agent/src/eval/js/worker-entry.ts");
+		expect(releaseEntrypoints).toContain("./packages/ai/src/models.json");
+		expect(releaseEntrypoints).toContain("./node_modules/handlebars/lib/index.js");
 		expect(releaseArgs).toContain("./packages/stats/src/sync-worker.ts");
 		expect(releaseArgs).toContain("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts");
 		expect(releaseArgs).toContain("./packages/coding-agent/src/eval/js/worker-entry.ts");
+		expect(releaseArgs).toContain("./packages/ai/src/models.json");
+		expect(releaseArgs).toContain("./node_modules/handlebars/lib/index.js");
+	});
+
+	it("includes lazy CommonJS entrypoints in dev args", () => {
+		expect(buildDevCompileArgs()).toContain("../ai/src/models.json");
+		expect(buildDevCompileArgs()).toContain("../../node_modules/handlebars/lib/index.js");
 	});
 
 	it("has exactly one target and outfile", () => {

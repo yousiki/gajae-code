@@ -14,12 +14,13 @@ import { isClaudeForcedToolChoiceIncapableModelId } from "./utils/tool-choice-ca
 type BundledCatalog = typeof import("./models.json");
 
 const require = createRequire(import.meta.url);
+const COMPILED_MODELS_PATH = "./packages/ai/src/models.json";
 let bundledCatalog: BundledCatalog | undefined;
 let providerNames: KnownProvider[] | undefined;
 const providerModelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
 
 function getBundledCatalog(): BundledCatalog {
-	bundledCatalog ??= require("./models.json") as BundledCatalog;
+	bundledCatalog ??= require(process.env.PI_COMPILED === "true" ? COMPILED_MODELS_PATH : "./models.json") as BundledCatalog;
 	return bundledCatalog;
 }
 
