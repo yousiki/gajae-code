@@ -21,6 +21,8 @@ import {
 	resolveGjcTeamWorkerCliPlan,
 	resolveGjcWorkerCommand,
 	sendGjcTeamMessage,
+	setGjcTeamMailboxDeliveryTransport,
+	setGjcTeamMailboxDeliveryTransportForTest,
 	shutdownGjcTeam,
 	startGjcTeam,
 	transitionGjcTeamTask,
@@ -218,7 +220,12 @@ function artifactCompletionEvidence(summary = "Completed by artifact review") {
 	};
 }
 
+let resetMailboxTransport: (() => void) | undefined;
+
 afterEach(async () => {
+	resetMailboxTransport?.();
+	resetMailboxTransport = undefined;
+	setGjcTeamMailboxDeliveryTransport(undefined);
 	if (cleanupRoot) {
 		for (const session of [
 			"gjc-worktree-team",
@@ -2170,6 +2177,185 @@ describe("native gjc team runtime", () => {
 			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
 		)) as { notification_ids: string[]; delivery_states: string[]; summary: { total: number } };
 		expect(notifications.delivery_states[0]).toBe("acknowledged");
+	});
+
+	it("routes team mailbox notifications through the configured transport seam", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		const delivered: Array<{ teamName: string; messageId: string; body: string }> = [];
+		await startGjcTeam({
+			workerCount: 2,
+			agentType: "executor",
+			task: "Notifications SDK transport seam",
+			teamName: "transport-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { GJC_SESSION_ID: TEST_SESSION_ID, PATH: "" },
+			mailboxDeliveryTransport: {
+				async deliverMailboxMessage(input) {
+					delivered.push({
+						teamName: input.team_name,
+						messageId: input.message.message_id,
+						body: input.message.body,
+					});
+					return { transport: "notifications_sdk", state: "sent", reason: "test-sdk" };
+				},
+			},
+		});
+
+		const message = await sendGjcTeamMessage(
+			"transport-team",
+			"worker-1",
+			"worker-2",
+			"hello through sdk seam",
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+			"transport-key",
+		);
+		const duplicate = await sendGjcTeamMessage(
+			"transport-team",
+			"worker-1",
+			"worker-2",
+			"hello through sdk seam",
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+			"transport-key",
+		);
+		const notifications = (await executeGjcTeamApiOperation(
+			"notification-list",
+			{ team_name: "transport-team" },
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+		)) as { delivery_states: string[]; notification_ids: string[] };
+
+		expect(duplicate.message_id).toBe(message.message_id);
+		expect(delivered).toEqual([
+			{ teamName: "transport-team", messageId: message.message_id, body: "hello through sdk seam" },
+		]);
+		expect(notifications.delivery_states).toEqual(["sent"]);
+	});
+
+	it("falls back to pane delivery when the configured mailbox transport is unavailable", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		await startGjcTeam({
+			workerCount: 2,
+			agentType: "executor",
+			task: "Notifications SDK transport fallback",
+			teamName: "transport-fallback-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { GJC_SESSION_ID: TEST_SESSION_ID, PATH: "" },
+		});
+		resetMailboxTransport = setGjcTeamMailboxDeliveryTransportForTest({
+			async deliverMailboxMessage() {
+				throw new Error("sdk unavailable");
+			},
+		});
+
+		await sendGjcTeamMessage("transport-fallback-team", "worker-1", "worker-2", "fallback please", cleanupRoot, {
+			PATH: "",
+			GJC_SESSION_ID: TEST_SESSION_ID,
+		});
+		const notifications = (await executeGjcTeamApiOperation(
+			"notification-list",
+			{ team_name: "transport-fallback-team" },
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+		)) as { delivery_states: string[] };
+
+		expect(notifications.delivery_states).toEqual(["sent"]);
+	});
+
+	it("does not redeliver idempotent duplicates for queued or deferred transport records", async () => {
+		for (const state of ["queued", "deferred"] as const) {
+			cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+			await startGjcTeam({
+				workerCount: 2,
+				agentType: "executor",
+				task: `Notifications SDK ${state} duplicate guard`,
+				teamName: `transport-${state}-team`,
+				cwd: cleanupRoot,
+				dryRun: true,
+				env: { GJC_SESSION_ID: TEST_SESSION_ID, PATH: "" },
+			});
+			let attempts = 0;
+			resetMailboxTransport = setGjcTeamMailboxDeliveryTransportForTest({
+				async deliverMailboxMessage() {
+					attempts += 1;
+					return { transport: "notifications_sdk", state, reason: `test-sdk-${state}` };
+				},
+			});
+
+			const message = await sendGjcTeamMessage(
+				`transport-${state}-team`,
+				"worker-1",
+				"worker-2",
+				`hello ${state}`,
+				cleanupRoot,
+				{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+				`transport-${state}-key`,
+			);
+			const duplicate = await sendGjcTeamMessage(
+				`transport-${state}-team`,
+				"worker-1",
+				"worker-2",
+				`hello ${state}`,
+				cleanupRoot,
+				{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+				`transport-${state}-key`,
+			);
+			const notifications = (await executeGjcTeamApiOperation(
+				"notification-list",
+				{ team_name: `transport-${state}-team` },
+				cleanupRoot,
+				{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+			)) as { delivery_states: string[] };
+
+			expect(duplicate.message_id).toBe(message.message_id);
+			expect(attempts).toBe(1);
+			expect(notifications.delivery_states).toEqual([state]);
+			resetMailboxTransport?.();
+			resetMailboxTransport = undefined;
+			await fs.rm(cleanupRoot, { recursive: true, force: true });
+			cleanupRoot = undefined;
+		}
+	});
+
+	it("falls back to pane delivery when the configured mailbox transport returns failed", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		await startGjcTeam({
+			workerCount: 2,
+			agentType: "executor",
+			task: "Notifications SDK explicit failure fallback",
+			teamName: "transport-failed-fallback-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { GJC_SESSION_ID: TEST_SESSION_ID, PATH: "" },
+		});
+		let attempts = 0;
+		resetMailboxTransport = setGjcTeamMailboxDeliveryTransportForTest({
+			async deliverMailboxMessage() {
+				attempts += 1;
+				return { transport: "notifications_sdk", state: "failed", reason: "test-sdk-failed" };
+			},
+		});
+
+		await sendGjcTeamMessage(
+			"transport-failed-fallback-team",
+			"worker-1",
+			"worker-2",
+			"fallback after explicit failure",
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+		);
+		const notifications = (await executeGjcTeamApiOperation(
+			"notification-list",
+			{ team_name: "transport-failed-fallback-team" },
+			cleanupRoot,
+			{ PATH: "", GJC_SESSION_ID: TEST_SESSION_ID },
+		)) as { delivery_states: string[] };
+
+		expect(attempts).toBe(1);
+		expect(notifications.delivery_states).toEqual(["sent"]);
 	});
 
 	it("rejects path-like worker ids and reports lifecycle nudges without automatic worker action", async () => {
