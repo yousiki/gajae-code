@@ -108,23 +108,23 @@ async function verifyStatusDefaults(): Promise<GateResult> {
 	const compactBlock = compactStart >= 0 && fullStart > compactStart ? presets.slice(compactStart, fullStart) : "";
 	const leftSegmentsByPreset = parsePresetLeftSegments(presets);
 	const publicPresetUsesPi = Object.entries(leftSegmentsByPreset).filter(([, segments]) => segments.includes("pi"));
-	const fullUsesGajae = leftSegmentsByPreset.full?.includes("gajae") === true;
-	const nerdUsesGajae = leftSegmentsByPreset.nerd?.includes("gajae") === true;
+	const fullOmitsGajae = leftSegmentsByPreset.full?.includes("gajae") === false;
+	const nerdOmitsGajae = leftSegmentsByPreset.nerd?.includes("gajae") === false;
 	return {
-		name: "default-visible status line identity",
+		name: "default-visible status line identity segments",
 		passed:
 			defaultBlock.includes('separator: "slash"') &&
 			!defaultBlock.includes('"pi"') &&
 			compactBlock.includes('separator: "slash"') &&
 			presets.includes('full: {') &&
-			fullUsesGajae &&
-			nerdUsesGajae &&
+			fullOmitsGajae &&
+			nerdOmitsGajae &&
 			publicPresetUsesPi.length === 0,
 		details: [
 			`default separator slash: ${defaultBlock.includes('separator: "slash"')}`,
 			`default pi segment absent: ${!defaultBlock.includes('"pi"')}`,
-			`full GJC identity present: ${fullUsesGajae}`,
-			`nerd GJC identity present: ${nerdUsesGajae}`,
+			`full decorative GJC identity absent: ${fullOmitsGajae}`,
+			`nerd decorative GJC identity absent: ${nerdOmitsGajae}`,
 			`public pi preset absent: ${publicPresetUsesPi.length === 0}${
 				publicPresetUsesPi.length > 0 ? ` (${publicPresetUsesPi.map(([name]) => name).join(", ")})` : ""
 			}`,
