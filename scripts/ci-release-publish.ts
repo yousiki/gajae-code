@@ -45,6 +45,7 @@ interface PackageManifest extends JsonObject {
 
 const repoRoot = path.join(import.meta.dir, "..");
 const isDryRun = process.argv.includes("--dry-run");
+const publishTag = normalizePublishTag();
 const nativePlatformPackages: readonly PublishPackage[] = [
 	{ dir: "packages/natives-darwin-arm64", kind: "native-platform", nativePrefixes: ["pi_natives.darwin-arm64"] },
 	{ dir: "packages/natives-linux-x64", kind: "native-platform", nativePrefixes: ["pi_natives.linux-x64"] },
@@ -88,6 +89,14 @@ export function normalizePublishScope(rawScope: string | undefined = process.env
 		throw new Error(`Invalid GJC_PUBLISH_SCOPE: ${rawScope}`);
 	}
 	return scope;
+}
+
+export function normalizePublishTag(rawTag: string | undefined = process.env.GJC_PUBLISH_TAG): string {
+	const tag = rawTag?.trim() || "latest";
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(tag)) {
+		throw new Error(`Invalid GJC_PUBLISH_TAG: ${rawTag}`);
+	}
+	return tag;
 }
 
 export function publishPackageNameForScope(name: string, scope: string | null = normalizePublishScope()): string {
@@ -340,7 +349,7 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 	}
 	if (isDryRun) {
 		if (pkg.kind === "native-platform") await stageNativePlatformArtifacts(pkg);
-		console.log(`DRY RUN npm publish --access public ${name} (${pkg.dir})`);
+		console.log(`DRY RUN npm publish --access public --tag ${publishTag} ${name} (${pkg.dir})`);
 		return;
 	}
 	const version = typeof manifest.version === "string" ? manifest.version : undefined;
@@ -352,7 +361,7 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 		}
 	}
 	console.log(`Publishing ${name}…`);
-	const result = await $`npm publish --access public`.cwd(pkgDir).quiet().nothrow();
+	const result = await $`npm publish --access public --tag ${publishTag}`.cwd(pkgDir).quiet().nothrow();
 	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
 	if (output) console.log(output);
 	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);

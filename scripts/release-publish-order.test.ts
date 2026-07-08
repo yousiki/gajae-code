@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
 	normalizeFileDependencySpec,
 	normalizePublishScope,
+	normalizePublishTag,
 	packages as publishPackages,
 	publishPackageNameForScope,
 	resolvePublishDependency,
@@ -69,6 +70,13 @@ describe("unscoped gajae-code package publication", () => {
 			"file:///tmp/gajae-code/packages/ai",
 		);
 		expect(normalizeFileDependencySpec("catalog:")).toBe("catalog:");
+	});
+
+	test("release publish tag defaults to latest for fork prereleases", () => {
+		expect(normalizePublishTag()).toBe("latest");
+		expect(normalizePublishTag("next")).toBe("next");
+		expect(() => normalizePublishTag("")).not.toThrow();
+		expect(() => normalizePublishTag("bad tag")).toThrow("Invalid GJC_PUBLISH_TAG");
 	});
 
 	test("fork publish scope rewrites package names and aliases workspace dependencies", async () => {
