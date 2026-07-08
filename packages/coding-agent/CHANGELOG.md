@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.1-yousiki.1] - 2026-07-08
+
 ### Changed
 
 - Release publishing now targets the fork namespace `@yousiki-gajae-code/*`, and GitHub Actions no longer build or publish Intel macOS (`darwin-x64`) artifacts while moving fork CI/release jobs to macOS 26 and Ubuntu 26.04 runners.
