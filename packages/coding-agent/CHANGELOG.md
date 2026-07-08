@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-08
+
 ### Added
 
 - Added Catppuccin Latte, Frappé, Macchiato, and Mocha as built-in theme options.
