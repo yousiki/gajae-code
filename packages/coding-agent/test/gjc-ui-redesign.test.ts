@@ -166,14 +166,15 @@ describe("GJC red-claw redesign defaults", () => {
 		expect(ACP_BUILTIN_SLASH_COMMANDS.map(item => item.name)).not.toContain("theme");
 	});
 
-	it("keeps public status presets on the GJC identity", () => {
+	it("keeps public status presets free of legacy and decorative identity segments", () => {
 		expect(SETTINGS_SCHEMA["statusLine.separator"].default).toBe("slash");
 		expect(STATUS_LINE_PRESETS.default.leftSegments).not.toContain("pi");
 		expect(STATUS_LINE_PRESETS.default.separator).toBe("slash");
-		expect(STATUS_LINE_PRESETS.full.leftSegments).toContain("gajae");
-		expect(STATUS_LINE_PRESETS.nerd.leftSegments).toContain("gajae");
+		expect(STATUS_LINE_PRESETS.full.leftSegments).not.toContain("gajae");
+		expect(STATUS_LINE_PRESETS.nerd.leftSegments).not.toContain("gajae");
 		for (const [name, preset] of Object.entries(STATUS_LINE_PRESETS)) {
 			expect(preset.leftSegments, name).not.toContain("pi");
+			expect(preset.leftSegments, name).not.toContain("gajae");
 		}
 	});
 

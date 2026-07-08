@@ -44,7 +44,7 @@ export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 	},
 
 	full: {
-		leftSegments: ["gajae", "hostname", "model", "mode", "path", "git", "pr", "subagents"],
+		leftSegments: ["hostname", "model", "mode", "path", "git", "pr", "subagents"],
 		rightSegments: [
 			"session_name",
 			"jobs",
@@ -68,7 +68,7 @@ export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 
 	nerd: {
 		// Full preset with all Nerd Font icons
-		leftSegments: ["gajae", "hostname", "model", "mode", "path", "git", "pr", "session", "subagents"],
+		leftSegments: ["hostname", "model", "mode", "path", "git", "pr", "session", "subagents"],
 		rightSegments: [
 			"session_name",
 			"jobs",

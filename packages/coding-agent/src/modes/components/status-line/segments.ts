@@ -70,7 +70,7 @@ const gajaeSegment: StatusLineSegment = {
 	},
 };
 
-// Legacy custom-config alias only. Public presets must use `gajae`.
+// Legacy custom-config alias for the decorative `gajae` segment.
 const legacyPiSegment: StatusLineSegment = {
 	id: "pi",
 	render(_ctx) {

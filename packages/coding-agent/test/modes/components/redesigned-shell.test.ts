@@ -278,13 +278,14 @@ describe("redesigned interactive shell chrome", () => {
 		}
 	});
 
-	it("keeps public status presets on the GJC identity", () => {
+	it("keeps public status presets free of legacy and decorative identity segments", () => {
 		for (const [name, preset] of Object.entries(STATUS_LINE_PRESETS)) {
 			expect(preset.leftSegments, name).not.toContain("pi");
+			expect(preset.leftSegments, name).not.toContain("gajae");
 		}
 
-		expect(STATUS_LINE_PRESETS.full.leftSegments).toContain("gajae");
-		expect(STATUS_LINE_PRESETS.nerd.leftSegments).toContain("gajae");
+		expect(STATUS_LINE_PRESETS.full.leftSegments[0]).toBe("hostname");
+		expect(STATUS_LINE_PRESETS.nerd.leftSegments[0]).toBe("hostname");
 	});
 
 	it("keeps the default status preset dense and pulse-forward", () => {

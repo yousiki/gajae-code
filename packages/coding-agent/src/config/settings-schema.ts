@@ -70,7 +70,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 /** Status line segment identifiers */
 export type StatusLineSegmentId =
 	| "gajae"
-	| "pi" // legacy custom alias; public presets use gajae
+	| "pi" // legacy custom alias for the decorative gajae segment
 	| "model"
 	| "mode"
 	| "path"
