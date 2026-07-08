@@ -47,9 +47,7 @@ const repoRoot = path.join(import.meta.dir, "..");
 const isDryRun = process.argv.includes("--dry-run");
 const nativePlatformPackages: readonly PublishPackage[] = [
 	{ dir: "packages/natives-darwin-arm64", kind: "native-platform", nativePrefixes: ["pi_natives.darwin-arm64"] },
-	{ dir: "packages/natives-linux-arm64", kind: "native-platform", nativePrefixes: ["pi_natives.linux-arm64"] },
 	{ dir: "packages/natives-linux-x64", kind: "native-platform", nativePrefixes: ["pi_natives.linux-x64"] },
-	{ dir: "packages/natives-win32-x64", kind: "native-platform", nativePrefixes: ["pi_natives.win32-x64"] },
 ];
 
 export const packages: PublishPackage[] = [

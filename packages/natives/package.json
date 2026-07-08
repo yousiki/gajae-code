@@ -62,9 +62,7 @@
 	],
 	"optionalDependencies": {
 		"@gajae-code/natives-darwin-arm64": "workspace:*",
-		"@gajae-code/natives-linux-arm64": "workspace:*",
-		"@gajae-code/natives-linux-x64": "workspace:*",
-		"@gajae-code/natives-win32-x64": "workspace:*"
+		"@gajae-code/natives-linux-x64": "workspace:*"
 	},
 	"exports": {
 		".": {

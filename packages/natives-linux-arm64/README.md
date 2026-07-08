@@ -1,5 +1,5 @@
 # @gajae-code/natives-linux-arm64
 
-Linux arm64 optional native addon package for `@gajae-code/natives`.
+Retired Linux arm64 optional native addon package for `@gajae-code/natives`.
 
-This package is installed as an optional dependency of `@gajae-code/natives`; users should import `@gajae-code/natives`, not this package directly.
+This fork no longer publishes Linux arm64 (`linux-arm64`) native addon packages; use Apple Silicon macOS or Linux x64 builds.

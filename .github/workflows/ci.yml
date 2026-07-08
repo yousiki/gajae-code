@@ -176,65 +176,8 @@ jobs:
               rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
               save_cache: ${{ github.event_name == 'push' && ((github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') || startsWith(github.ref, 'refs/tags/v')) }}
 
-   # Windows-latest smoke for the `bun install -g gajae-code` runtime path
-   # (issue #525): build the win32-x64 native addon, then exercise the bun-run
-   # CLI surface a native install hits — bun + gjc version, help, `gjc team
-   # --help`, and the native/worker smoke probe. Runs on PRs and branch pushes
-   # so Windows regressions surface before release; release tags already run the
-   # Windows release-binary smoke in the publishing gate.
-   windows_smoke:
-      timeout-minutes: 60
-      needs: [relevance]
-      if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: windows-latest
-      steps:
-         - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-           with:
-              bun-version: "1.3"
-         - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2  # nightly
-           if: needs.relevance.outputs.relevant == 'true'
-           with:
-              toolchain: nightly-2026-04-29
-         - name: Prepend rustup toolchain bin to PATH
-           if: needs.relevance.outputs.relevant == 'true'
-           shell: bash
-           run: |
-              toolchain_bin="$(dirname "$(rustup which cargo)")"
-              echo "$toolchain_bin" >> "$GITHUB_PATH"
-         - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-           if: needs.relevance.outputs.relevant == 'true'
-           with:
-              shared-key: windows-smoke-win32-x64
-              cache-on-failure: true
-              save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
-              cache-workspace-crates: true
-         - name: Cache bun dependencies
-           if: needs.relevance.outputs.relevant == 'true'
-           uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         - if: needs.relevance.outputs.relevant == 'true'
-           run: bun install --frozen-lockfile
-         - name: Build native addon (win32-x64 baseline)
-           if: needs.relevance.outputs.relevant == 'true'
-           env:
-              TARGET_PLATFORM: win32
-              TARGET_ARCH: x64
-              TARGET_VARIANTS: baseline
-           run: bun run ci:build:native
-         - name: Smoke bun + gjc CLI (source runtime)
-           if: needs.relevance.outputs.relevant == 'true'
-           shell: pwsh
-           run: |
-              bun --version
-              bun packages/coding-agent/src/cli.ts --version
-              bun packages/coding-agent/src/cli.ts --help
-              bun packages/coding-agent/src/cli.ts team --help
-              bun packages/coding-agent/src/cli.ts --smoke-test
 
-   # Remaining platforms only ship in release tags; PRs and main never build them.
+   # macOS arm64 native addon only ships in release tags; linux-x64 is built by native_linux.
    native_release:
       timeout-minutes: 90
       needs: [rust-hash]
@@ -243,9 +186,9 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { os: ubuntu-26.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+
                - { os: macos-26, platform: darwin, arch: arm64 }
-               - { os: windows-latest, platform: win32, arch: x64, variant: baseline }
+
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -374,25 +317,11 @@ jobs:
                     binary_path: packages/coding-agent/binaries/gjc-linux-x64,
                  }
                - {
-                    os: ubuntu-26.04-arm,
-                    platform: linux,
-                    arch: arm64,
-                    target_id: linux-arm64,
-                    binary_path: packages/coding-agent/binaries/gjc-linux-arm64,
-                 }
-               - {
                     os: macos-26,
                     platform: darwin,
                     arch: arm64,
                     target_id: darwin-arm64,
                     binary_path: packages/coding-agent/binaries/gjc-darwin-arm64,
-                 }
-               - {
-                    os: windows-latest,
-                    platform: win32,
-                    arch: x64,
-                    target_id: win32-x64,
-                    binary_path: packages/coding-agent/binaries/gjc-windows-x64.exe,
                  }
       runs-on: ${{ matrix.os }}
       permissions:

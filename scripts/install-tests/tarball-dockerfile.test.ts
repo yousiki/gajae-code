@@ -14,9 +14,7 @@ describe("tarball Verdaccio smoke publish list", () => {
 		const packages = readPublishPackages(dockerfile);
 		const platformPackages = [
 			"natives-darwin-arm64",
-			"natives-linux-arm64",
 			"natives-linux-x64",
-			"natives-win32-x64",
 		];
 
 		expect(packages).toEqual(expect.arrayContaining(platformPackages));

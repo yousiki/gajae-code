@@ -55,20 +55,6 @@ const targets: BinaryTarget[] = [
 		target: "bun-linux-x64-baseline",
 		outfile: "packages/coding-agent/binaries/gjc-linux-x64",
 	},
-	{
-		id: "linux-arm64",
-		platform: "linux",
-		arch: "arm64",
-		target: "bun-linux-arm64",
-		outfile: "packages/coding-agent/binaries/gjc-linux-arm64",
-	},
-	{
-		id: "win32-x64",
-		platform: "win32",
-		arch: "x64",
-		target: "bun-windows-x64-modern",
-		outfile: "packages/coding-agent/binaries/gjc-windows-x64.exe",
-	},
 ];
 
 function parseRequestedTargets(): Set<string> | null {

@@ -101,9 +101,9 @@ describe("update-cli binary release assets", () => {
 		);
 	});
 
-	it("uses the existing Windows .exe release asset name", () => {
-		expect(buildReleaseBinaryUrlForTest("0.2.3", "win32", "x64")).toBe(
-			"https://github.com/Yeachan-Heo/gajae-code/releases/download/v0.2.3/gjc-windows-x64.exe",
+	it("rejects Windows release binary URLs because this fork no longer ships them", () => {
+		expect(() => buildReleaseBinaryUrlForTest("0.2.3", "win32", "x64")).toThrow(
+			"Prebuilt binary releases are published only for macOS arm64 and Linux x64",
 		);
 	});
 
@@ -117,27 +117,21 @@ describe("update-cli binary release assets", () => {
 		);
 	});
 
-	it("reports actionable Windows manual update commands for unsupported fallback paths", () => {
+	it("reports unsupported binary platform guidance for Windows fallback paths", () => {
 		const instructions = formatManualUpdateInstructionsForTest("win32");
 
 		expect(instructions).toContain("bun install -g @gajae-code/coding-agent@latest");
 		expect(instructions).toContain("npm, pnpm, or another package manager");
-		expect(instructions).toContain(
-			"irm https://raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.ps1 | iex",
-		);
+		expect(instructions).toContain("Prebuilt binary releases are published only for macOS arm64 and Linux x64");
+		expect(instructions).not.toContain("install.ps1");
 	});
 
-	it("keeps manual reinstall guidance aligned with bundled installer repositories", async () => {
+	it("keeps Unix manual reinstall guidance aligned with bundled installer repository", async () => {
 		const instructions = formatManualUpdateInstructionsForTest("linux");
 		const shellInstaller = await Bun.file(path.join(repoRoot, "scripts/install.sh")).text();
-		const windowsInstaller = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
 
 		expect(instructions).toContain("raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.sh");
 		expect(shellInstaller).toContain('REPO="Yeachan-Heo/gajae-code"');
-		expect(windowsInstaller).toContain('$Repo = "Yeachan-Heo/gajae-code"');
-		expect(formatManualUpdateInstructionsForTest("win32")).toContain(
-			"raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.ps1",
-		);
 	});
 
 	it("reports smoke-test failures as stale or partial update risk", () => {
