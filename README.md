@@ -285,6 +285,9 @@ GJC_PUBLISH_SCOPE=@yousiki-gajae-code bun scripts/ci-release-publish.ts --dry-ru
 GJC_PUBLISH_SCOPE=@yousiki-gajae-code bun scripts/ci-release-publish.ts
 ```
 
+Tag releases publish to npm through trusted publishing, not a long-lived `NPM_TOKEN`. Configure npmjs.com Trusted Publisher on each `@yousiki-gajae-code/*` package with GitHub organization/user `yousiki`, repository `gajae-code`, workflow filename `ci.yml`, no environment name, and allowed action `npm publish`. The package `repository.url` fields point at `github.com/yousiki/gajae-code` because npm validates them during OIDC publishing. The `release-npm` workflow job grants `id-token: write` and installs npm `^11.5.1`, which npm requires for OIDC publishing.
+For local bootstrap setup, use Bun for the one-time placeholder publish and run npm's trusted-publisher CLI through `bunx npm@^11.15.0`; no global npm install or repository token secret is required.
+
 The final user install command is:
 
 ```sh

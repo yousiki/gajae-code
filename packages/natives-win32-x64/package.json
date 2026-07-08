@@ -9,11 +9,11 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Yeachan-Heo/gajae-code.git",
+		"url": "git+https://github.com/yousiki/gajae-code.git",
 		"directory": "packages/natives-win32-x64"
 	},
 	"bugs": {
-		"url": "https://github.com/Yeachan-Heo/gajae-code/issues"
+		"url": "https://github.com/yousiki/gajae-code/issues"
 	},
 	"os": [
 		"win32"

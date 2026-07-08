@@ -22,6 +22,14 @@ interface PackageManifest {
 	bin?: Record<string, string>;
 	dependencies?: Record<string, string>;
 	private?: boolean;
+	repository?: {
+		type?: string;
+		url?: string;
+		directory?: string;
+	};
+	bugs?: {
+		url?: string;
+	};
 	optionalDependencies?: Record<string, string>;
 	files?: string[];
 	os?: string[];
@@ -93,6 +101,14 @@ describe("unscoped gajae-code package publication", () => {
 			} else {
 				process.env.GJC_PUBLISH_SCOPE = previousScope;
 			}
+		}
+	});
+
+	test("published package repository metadata matches the fork for npm trusted publishing", async () => {
+		for (const pkg of publishPackages) {
+			const manifest = await readManifest(pkg.dir);
+			expect(manifest.repository?.url).toBe("git+https://github.com/yousiki/gajae-code.git");
+			expect(manifest.bugs?.url).toBe("https://github.com/yousiki/gajae-code/issues");
 		}
 	});
 
@@ -305,11 +321,16 @@ describe("native release binary coverage", () => {
 		}
 	});
 
-	test("release workflow publishes npm packages under the fork scope", async () => {
+	test("release workflow publishes npm packages under the fork scope with trusted publishing", async () => {
 		const workflow = await Bun.file(path.join(repoRoot, ".github/workflows/ci.yml")).text();
 
 		expect(workflow).toContain('GJC_PUBLISH_SCOPE: "@yousiki-gajae-code"');
+		expect(workflow).toContain("id-token: write");
+		expect(workflow).toContain("run: npm install -g npm@^11.5.1");
 		expect(workflow).toContain("run: bun run ci:release:publish");
+		expect(workflow).not.toContain("NPM_TOKEN");
+		expect(workflow).not.toContain("NODE_AUTH_TOKEN");
+		expect(workflow).not.toContain("Configure npm auth");
 	});
 
 	test("installer explains missing release assets with fallback guidance", async () => {

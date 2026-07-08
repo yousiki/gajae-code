@@ -8,7 +8,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Yeachan-Heo/gajae-code.git",
+		"url": "git+https://github.com/yousiki/gajae-code.git",
 		"directory": "packages/typescript-edit-benchmark"
 	},
 	"main": "./src/index.ts",
