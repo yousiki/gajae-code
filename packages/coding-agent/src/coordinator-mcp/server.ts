@@ -13,6 +13,7 @@ import {
 	GJC_COORDINATOR_SESSION_ID_ENV,
 	GJC_COORDINATOR_SESSION_STATE_FILE_ENV,
 } from "../gjc-runtime/session-state-sidecar";
+import { resolveGjcTmuxCommand } from "../gjc-runtime/tmux-common";
 import {
 	assertCoordinatorArtifactPath,
 	assertCoordinatorWorkdir,
@@ -126,6 +127,10 @@ interface TurnRecord {
 			reason: string | null;
 			channel?: "tmux_keys" | "runtime_ack";
 			tmux_keys_sent?: boolean;
+			operation?: string;
+			exit_code?: number | null;
+			stderr?: string;
+			stdout?: string;
 		}>;
 	};
 	question_ids: string[];
@@ -813,9 +818,10 @@ function safeTmuxSessionName(value: unknown): string {
 }
 
 function safeTmuxTarget(value: unknown): string {
-	if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,160}$/.test(value)) {
-		throw new Error("invalid_tmux_target");
-	}
+	if (typeof value !== "string") throw new Error("invalid_tmux_target");
+	const safeNamedTarget = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,160}$/.test(value);
+	const safePaneIdTarget = /^%[0-9]{1,20}$/.test(value);
+	if (!safeNamedTarget && !safePaneIdTarget) throw new Error("invalid_tmux_target");
 	return value;
 }
 
@@ -976,6 +982,10 @@ function unavailableSessionReason(turn: TurnRecord, reason: string): string {
 		return "tmux_session_missing_after_prompt_acknowledgement";
 	}
 	return reason;
+}
+
+function isTmuxDeliveryUnavailableReason(reason: string | null | undefined): reason is string {
+	return reason === "tmux_delivery_unavailable" || reason?.startsWith("tmux_delivery_failed:") === true;
 }
 
 function unavailableSessionEvidence(turn: TurnRecord, reason: string, timestamp: string): Record<string, unknown>[] {
@@ -1298,8 +1308,21 @@ export function boundedEventWatchTimeoutMs(value: unknown): number {
 export function boundedPollIntervalMs(value: unknown): number {
 	return Math.min(Math.max(parsePositiveIntegerMs(value, 100), 10), COORDINATOR_POLL_INTERVAL_MAX_MS);
 }
-async function runCommand(command: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-	const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+function resolvedDefaultCommand(command: string[], env: NodeJS.ProcessEnv = process.env): string[] {
+	if (command[0] !== "tmux") return command;
+	return [resolveGjcTmuxCommand(env), ...command.slice(1)];
+}
+
+async function runResolvedCommand(
+	command: string[],
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+	const proc = Bun.spawn(resolvedDefaultCommand(command, mergedEnv), {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: mergedEnv,
+	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
@@ -1308,29 +1331,69 @@ async function runCommand(command: string[]): Promise<{ exitCode: number; stdout
 	return { exitCode, stdout, stderr };
 }
 
+async function runCommand(command: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	return await runResolvedCommand(command);
+}
+
 type CommandRunner = (command: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+function createRunCommand(env: NodeJS.ProcessEnv): CommandRunner {
+	return command => runResolvedCommand(command, env);
+}
+
+interface TmuxPromptDeliveryFailure {
+	operation: string;
+	exitCode: number | null;
+	stderr: string;
+	stdout: string;
+}
+
+interface TmuxPromptDeliveryResult {
+	delivered: boolean;
+	failure: TmuxPromptDeliveryFailure | null;
+}
+
+function boundedCommandOutput(value: string): string {
+	return boundSummary(value.trim());
+}
+
+function tmuxDeliveryFailure(
+	operation: string,
+	result: { exitCode: number | null; stdout: string; stderr: string },
+): TmuxPromptDeliveryFailure {
+	return {
+		operation,
+		exitCode: result.exitCode,
+		stderr: boundedCommandOutput(result.stderr),
+		stdout: boundedCommandOutput(result.stdout),
+	};
+}
 
 async function sendTmuxPromptKeys(
 	target: string,
 	prompt: string,
 	runner: CommandRunner = runCommand,
-): Promise<boolean> {
+): Promise<TmuxPromptDeliveryResult> {
 	const bufferName = `gjc-coordinator-prompt-${randomUUID()}`;
 	const buffered = await runner(["tmux", "set-buffer", "-b", bufferName, "--", prompt]);
-	if (buffered.exitCode !== 0) return false;
+	if (buffered.exitCode !== 0) return { delivered: false, failure: tmuxDeliveryFailure("set-buffer", buffered) };
 	const pasted = await runner(["tmux", "paste-buffer", "-d", "-b", bufferName, "-t", target]);
 	if (pasted.exitCode !== 0) {
 		await runner(["tmux", "delete-buffer", "-b", bufferName]);
-		return false;
+		return { delivered: false, failure: tmuxDeliveryFailure("paste-buffer", pasted) };
 	}
 
 	// Multiline slash-command prompts can leave the editor autocomplete menu focused
 	// after paste. Escape clears that UI-only state so Enter submits the buffered
 	// prompt instead of selecting the highlighted completion.
 	const dismissedAutocomplete = await runner(["tmux", "send-keys", "-t", target, "Escape"]);
-	if (dismissedAutocomplete.exitCode !== 0) return false;
+	if (dismissedAutocomplete.exitCode !== 0) {
+		return { delivered: false, failure: tmuxDeliveryFailure("send-keys:Escape", dismissedAutocomplete) };
+	}
 	const submitted = await runner(["tmux", "send-keys", "-t", target, "Enter"]);
-	return submitted.exitCode === 0;
+	if (submitted.exitCode !== 0)
+		return { delivered: false, failure: tmuxDeliveryFailure("send-keys:Enter", submitted) };
+	return { delivered: true, failure: null };
 }
 
 function boundedLineCount(value: unknown): number {
@@ -1433,21 +1496,36 @@ async function startTmuxSession(
 	};
 }
 
-async function captureTmuxTail(session: Record<string, unknown>, lines: number): Promise<string[]> {
+function splitTmuxCaptureLines(stdout: string, lines: number): string[] {
+	const withoutTerminator = stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
+	if (withoutTerminator.length === 0) return [];
+	return withoutTerminator.split("\n").slice(-lines);
+}
+
+async function captureTmuxTail(
+	session: Record<string, unknown>,
+	lines: number,
+	runner: CommandRunner = runCommand,
+): Promise<string[]> {
 	const target = typeof session.tmux_target === "string" ? session.tmux_target : session.tmuxTarget;
 	if (typeof target !== "string" || target.length === 0) return [];
-	const captured = await runCommand(["tmux", "capture-pane", "-t", target, "-p", "-S", `-${lines}`]);
+	const captured = await runner(["tmux", "capture-pane", "-t", target, "-p", "-S", `-${lines}`]);
 	if (captured.exitCode !== 0) return [];
-	return captured.stdout.split("\n").slice(-lines);
+	return splitTmuxCaptureLines(captured.stdout, lines);
 }
 
 async function sendTmuxPrompt(
 	session: Record<string, unknown>,
 	prompt: string,
 	runner: CommandRunner = runCommand,
-): Promise<boolean> {
+): Promise<TmuxPromptDeliveryResult> {
 	const target = typeof session.tmux_target === "string" ? session.tmux_target : session.tmuxTarget;
-	if (typeof target !== "string" || target.length === 0) return false;
+	if (typeof target !== "string" || target.length === 0) {
+		return {
+			delivered: false,
+			failure: { operation: "resolve-target", exitCode: null, stderr: "tmux_target_missing", stdout: "" },
+		};
+	}
 	return await sendTmuxPromptKeys(target, prompt, runner);
 }
 
@@ -1492,7 +1570,7 @@ async function inspectTmuxSession(
 	runner: CommandRunner = runCommand,
 ): Promise<Record<string, unknown>> {
 	const live = await hasTmuxSession(session, runner);
-	const tail = live ? await captureTmuxTail(session, lines) : [];
+	const tail = live ? await captureTmuxTail(session, lines, runner) : [];
 	return {
 		live,
 		...summarizePaneTail(tail),
@@ -1620,7 +1698,7 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 	const promptAckTimeoutMs = boundedRuntimePromptAckTimeoutMs(env.GJC_COORDINATOR_MCP_PROMPT_ACK_TIMEOUT_MS);
 	const services = options.services ?? {};
 	const namespaceDir = coordinatorNamespacePath(config);
-	const commandRunner = services.commandRunner ?? runCommand;
+	const commandRunner = services.commandRunner ?? createRunCommand(env);
 
 	async function listSessions(): Promise<unknown[]> {
 		if (!config.namespace.profile || !config.namespace.repo) return [];
@@ -1689,8 +1767,14 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 			reason: null,
 		});
 
-		const tmuxKeysSent = await sendTmuxPrompt(session, turn.prompt.text, commandRunner);
+		const deliveryResult = await sendTmuxPrompt(session, turn.prompt.text, commandRunner);
+		const tmuxKeysSent = deliveryResult.delivered;
 		const deliveredAt = new Date().toISOString();
+		const deliveryReason = tmuxKeysSent
+			? "awaiting_runtime_ack"
+			: deliveryResult.failure
+				? `tmux_delivery_failed:${deliveryResult.failure.operation}`
+				: "tmux_delivery_unavailable";
 		const activeTurn: TurnRecord = {
 			...pendingTurn,
 			delivery: {
@@ -1706,7 +1790,15 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 						tmux_keys_sent: tmuxKeysSent,
 						channel: "tmux_keys",
 						created_at: deliveredAt,
-						reason: tmuxKeysSent ? "awaiting_runtime_ack" : "tmux_delivery_unavailable",
+						reason: deliveryReason,
+						...(deliveryResult.failure
+							? {
+									operation: deliveryResult.failure.operation,
+									exit_code: deliveryResult.failure.exitCode,
+									stderr: deliveryResult.failure.stderr,
+									stdout: deliveryResult.failure.stdout,
+								}
+							: {}),
 					},
 				],
 			},
@@ -1725,7 +1817,7 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 			await writeSessionState(namespaceDir, activeTurn.session_id, "stale", {
 				currentTurnId: activeTurn.turn_id,
 				live,
-				reason: "tmux_delivery_unavailable",
+				reason: deliveryReason,
 			});
 		}
 		await appendCoordinatorEvent(namespaceDir, {
@@ -1736,7 +1828,19 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 				? `Tmux delivery succeeded for turn ${activeTurn.turn_id}`
 				: `Tmux delivery failed for turn ${activeTurn.turn_id}`,
 			payloadRef: path.relative(namespaceDir, turnFile(namespaceDir, activeTurn.turn_id)),
-			metadata: { target: typeof target === "string" ? target : null, live },
+			metadata: {
+				target: typeof target === "string" ? target : null,
+				live,
+				reason: deliveryReason,
+				...(deliveryResult.failure
+					? {
+							operation: deliveryResult.failure.operation,
+							exit_code: deliveryResult.failure.exitCode,
+							stderr: deliveryResult.failure.stderr,
+							stdout: deliveryResult.failure.stdout,
+						}
+					: {}),
+			},
 		});
 		return resolvedTurn;
 	}
@@ -1790,16 +1894,12 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 			ACTIVE_TURN_STATUSES.has(resolvedTurn.status) &&
 			sessionState.current_turn_id === resolvedTurn.turn_id &&
 			sessionState.state === "stale" &&
-			sessionState.reason === "tmux_delivery_unavailable" &&
+			isTmuxDeliveryUnavailableReason(sessionState.reason) &&
 			resolvedTurn.delivery.state === "unavailable" &&
 			session &&
 			hasTmuxIdentity(session)
 		) {
-			resolvedTurn = await markTurnFailedForUnavailableSession(
-				namespaceDir,
-				resolvedTurn,
-				"tmux_delivery_unavailable",
-			);
+			resolvedTurn = await markTurnFailedForUnavailableSession(namespaceDir, resolvedTurn, sessionState.reason);
 			sessionState = await readSessionState(namespaceDir, resolvedTurn.session_id);
 		} else if (!session && ACTIVE_TURN_STATUSES.has(resolvedTurn.status)) {
 			resolvedTurn = await markTurnFailedForUnavailableSession(namespaceDir, resolvedTurn, "session_record_missing");
@@ -1866,12 +1966,12 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 				sessionState &&
 				sessionState.current_turn_id === resolvedTurn.turn_id &&
 				sessionState.state === "stale" &&
-				sessionState.reason === "tmux_delivery_unavailable" &&
+				isTmuxDeliveryUnavailableReason(sessionState.reason) &&
 				resolvedTurn.delivery.state === "unavailable" &&
 				session &&
 				hasTmuxIdentity(session)
 			) {
-				await markTurnFailedForUnavailableSession(namespaceDir, resolvedTurn, "tmux_delivery_unavailable");
+				await markTurnFailedForUnavailableSession(namespaceDir, resolvedTurn, sessionState.reason);
 				continue;
 			}
 			if (!session) {
@@ -1952,7 +2052,10 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 			}
 			if (name === "gjc_coordinator_read_tail") {
 				const session = asRecord(await readJsonFile(sessionFile(args.session_id)));
-				return { ok: true, lines: session ? await captureTmuxTail(session, boundedLineCount(args.lines)) : [] };
+				return {
+					ok: true,
+					lines: session ? await captureTmuxTail(session, boundedLineCount(args.lines), commandRunner) : [],
+				};
 			}
 			if (name === "gjc_coordinator_list_questions") return { ok: true, questions: await listQuestions(args) };
 			if (name === "gjc_coordinator_list_artifacts") return { ok: true, roots: config.allowedRoots };
@@ -1998,13 +2101,18 @@ export function createCoordinatorMcpServer(options: CoordinatorMcpServerOptions 
 				const timeoutMs = boundedEventWatchTimeoutMs(args.timeout_ms);
 				let events = await readCoordinatorEvents(namespaceDir);
 				let matched = filterCoordinatorEvents(events, args, limit);
+				const deadline = Date.now() + timeoutMs;
 				let timedOut = false;
-				if (matched.length === 0 && timeoutMs > 0) {
-					await waitForCoordinatorEvents(namespaceDir, timeoutMs);
+				while (matched.length === 0 && timeoutMs > 0) {
+					const remainingMs = deadline - Date.now();
+					if (remainingMs <= 0) {
+						timedOut = true;
+						break;
+					}
+					await waitForCoordinatorEvents(namespaceDir, remainingMs);
 					await reconcileActiveTurnAcknowledgements();
 					events = await readCoordinatorEvents(namespaceDir);
 					matched = filterCoordinatorEvents(events, args, limit);
-					timedOut = matched.length === 0;
 				}
 				return {
 					ok: true,

@@ -254,6 +254,17 @@ This profile is applied on macOS, Linux, WSL (Linux), and native Windows when a 
 | `GJC_PSMUX_DETECTION` | Set `0`/`false`/`off` to skip psmux detection entirely. GJC falls back to treating the resolved command as plain tmux. |
 | `GJC_PSMUX_FORCE_DETECT` | Set `1`/`true`/`on` to re-probe the multiplexer on every call instead of caching the per-process verdict. |
 
+#### Experimental Herdr mux adapter
+
+tmux remains the default and supported long-running/session/team multiplexer. The Herdr adapter is an experimental external-binary mux service used only when explicitly selected for implementation tests or future staged rollout work; it is not bundled, vendored, linked, or installed, and is not selected by default. It does not change `gjc --tmux`, `gjc session`, `gjc team`, Coordinator MCP lifecycle/delivery, harness resident owner, GC, or tmux-scroll behavior in the current MVP.
+
+| Variable | Behavior |
+| --- | --- |
+| `GJC_MUX_BACKEND` | Experimental internal mux backend selector: `tmux` is the default; `herdr` opts into the Herdr adapter. Invalid values fail closed. |
+| `GJC_HERDR_COMMAND` | External Herdr executable path/name used only when `GJC_MUX_BACKEND=herdr`. This is not a shell command line; include only the executable path/name, not flags. The adapter probes Herdr version and API schema before use and fails closed when the binary or schema is unsupported. |
+
+The Herdr adapter currently covers only the typed launch/session/tail/list MVP used behind the mux service contract. Non-MVP flows stay tmux-only: team workers, Coordinator MCP start/register/deliver lifecycle, notification lifecycle control, harness resident owner, tmux GC, and tmux-scroll.
+
 #### Windows psmux support
 
 On native Windows, [psmux](https://github.com/psmux/psmux) is the supported tmux-compatible multiplexer for `gjc --tmux`, `gjc session`, and `gjc team`. Psmux may be installed as `psmux.exe` or through its `tmux.exe` / `pmux.exe` aliases; the same guidance applies when `GJC_TMUX_COMMAND` is left at the default `tmux` but the executable on PATH is actually psmux.

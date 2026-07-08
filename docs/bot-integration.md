@@ -72,6 +72,8 @@ The generated config uses these environment variables:
 
 Mutating calls require both startup opt-in and per-call `allow_mutation: true`. Missing either one fails closed.
 
+Coordinator MCP lifecycle and prompt delivery remain tmux-backed in the current MVP. `GJC_MUX_BACKEND=herdr` is an experimental internal mux-service adapter selector, not a Coordinator MCP lifecycle backend; do not put it in generated bot configs to replace tmux. Use `GJC_TMUX_COMMAND` for tmux-compatible command selection, or register the visible tmux fallback when an operator already owns the pane.
+
 ## Generic smoke strategy
 
 Use three different smoke levels so CI does not depend on one operator's model, API key, tmux layout, or desktop:

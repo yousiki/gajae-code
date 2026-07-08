@@ -140,11 +140,12 @@ Troubleshooting:
   but not on `PATH`. Confirm `%USERPROFILE%\.bun\bin` is listed in
   `echo $env:Path`, then restart the terminal.
 - **`gjc --tmux` starts without a tmux-backed session.** Native Windows needs a
-  tmux-compatible executable on `PATH`. For GJC-managed session/team guarantees,
-  use WSL with real tmux, or another provider that round-trips tmux user options
-  such as `@gjc-profile`. Native psmux can provide `tmux`/`pmux`/`psmux`
-  commands, but that path is not fully supported for GJC ownership tags and team
-  guarantees yet; see `docs/environment-variables.md#interactive---tmux-startup-and-scrollmouse-profile`.
+  tmux-compatible executable on `PATH`. GJC probes `psmux`, then `pmux`, then
+  `tmux`; psmux is the supported native-Windows tmux-compatible provider for
+  `gjc --tmux`, `gjc session`, and `gjc team` when its GJC ownership tags round-trip.
+  Use WSL with real tmux when you need full tmux semantics or custom server
+  namespaces; do not pass flags through `GJC_TMUX_COMMAND`. See
+  `docs/environment-variables.md#interactive---tmux-startup-and-scrollmouse-profile`.
 
 ## Quick start
 
@@ -162,6 +163,10 @@ gjc --tmux --worktree my-task-branch
 # If you already created a worktree directory, launch from that directory instead.
 cd ../my-task-worktree && gjc --tmux
 ```
+
+### Multiplexer backend status
+
+tmux is still the default and supported backend for long-running GJC sessions, `gjc session`, external coordinator lifecycle control, and `gjc team`. An experimental external Herdr mux adapter exists only behind `GJC_MUX_BACKEND=herdr` plus optional `GJC_HERDR_COMMAND`; it is not bundled, not vendored, not selected by default, and currently covers only the typed launch/session/tail/list MVP. Use tmux for production session/team workflows until the Herdr rollout gates say otherwise.
 
 ### Image input
 

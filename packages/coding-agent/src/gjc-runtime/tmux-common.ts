@@ -220,7 +220,7 @@ export function buildGjcTmuxProfileCommands(
 		sessionStateFile?: string | null;
 		version?: string | null;
 	} = {},
-	opts: { platform?: NodeJS.Platform; tmuxCommand?: string } = {},
+	opts: { platform?: NodeJS.Platform; tmuxCommand?: string; binary?: ResolvedTmuxBinary } = {},
 ): GjcTmuxProfileCommand[] {
 	const commands = buildGjcTmuxRequiredProfileCommands(target, metadata);
 	if (envDisabled(env[GJC_TMUX_PROFILE_ENV])) return commands;
@@ -244,22 +244,32 @@ export function buildGjcTmuxProfileCommands(
 	// running on a psmux build that has caught up. The ownership-tag
 	// round-trip (set-option @gjc-*) is never filtered, since gjc session /
 	// gjc team rely on it.
-	// The filter is opt-in: callers that explicitly pass `opts.tmuxCommand`
-	// name a psmux-class multiplexer (psmux / pmux) when they want the UX
-	// profile filtered. Auto-detect on Windows hosts where psmux happens
-	// to be on PATH would silently change the test output for every caller
-	// that does not pin the multiplexer, so we require the caller to opt
-	// in by naming the multiplexer. GJC_PSMUX_PROFILE_FORCE re-enables
-	// the UX profile commands when a psmux build catches up.
-	const tmuxName = (opts.tmuxCommand ?? "").toLowerCase();
-	const isPsmuxClass =
+	// The filter engages when callers explicitly name a psmux-class command OR
+	// when the resolver/probe proves the selected tmux-compatible binary is
+	// actually psmux (for example a `tmux` alias, Windows PATH resolution, or a
+	// GJC_PSMUX_COMMAND-forced wrapper). Keeping detection tied to an explicit
+	// tmuxCommand/binary avoids silently changing callers that do not name their
+	// multiplexer while still preserving psmux profile parity for supported
+	// aliases.
+	const tmuxName = (opts.tmuxCommand ?? opts.binary?.command ?? "").toLowerCase();
+	const commandLooksPsmux =
 		tmuxName === "psmux" ||
 		tmuxName === "pmux" ||
 		tmuxName.endsWith("/psmux") ||
 		tmuxName.endsWith("/pmux") ||
 		tmuxName.endsWith("\\psmux") ||
 		tmuxName.endsWith("\\pmux");
-	const dropUx = isPsmuxClass && !envDisabled(env[GJC_PSMUX_PROFILE_FORCE_ENV]);
+	const detectedPsmux =
+		opts.binary?.isPsmux ??
+		(opts.tmuxCommand
+			? resolveGjcTmuxBinary({
+					env: { ...env, GJC_TMUX_COMMAND: opts.tmuxCommand },
+					platform: opts.platform,
+				}).isPsmux
+			: false);
+	const psmuxProfileForce = env[GJC_PSMUX_PROFILE_FORCE_ENV]?.trim();
+	const forceUxProfile = !!psmuxProfileForce && !envDisabled(psmuxProfileForce);
+	const dropUx = (commandLooksPsmux || detectedPsmux) && !forceUxProfile;
 	if (dropUx) {
 		return commands.filter(command => {
 			const flag = command.args[0];

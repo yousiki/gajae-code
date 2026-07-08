@@ -997,6 +997,21 @@ describe("default GJC tmux launch", () => {
 		).not.toContain("mouse");
 	});
 
+	it("filters psmux UX profile commands when a tmux alias is detected as psmux", () => {
+		const commands = buildGjcTmuxProfileCommands(
+			"gjc-session:0",
+			{},
+			{},
+			{ binary: { command: "tmux", isPsmux: true, viaExplicitOverride: false } },
+		);
+		const args = commands.map(command => command.args);
+
+		expect(args).toContainEqual(["set-option", "-t", "gjc-session:0", "@gjc-profile", "1"]);
+		expect(args.flat()).not.toContain("mouse");
+		expect(args.flat()).not.toContain("set-clipboard");
+		expect(args.flat()).not.toContain("mode-style");
+	});
+
 	it("records session identity markers in the required tmux profile", () => {
 		const commands = buildGjcTmuxProfileCommands(
 			"gjc-session:0",
