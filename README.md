@@ -312,6 +312,21 @@ Run the CLI from source directly without linking:
 bun packages/coding-agent/src/cli.ts --help
 ```
 
+### Fork scoped npm publish
+
+To publish this checkout under your own npm scope without rewriting source imports, set `GJC_PUBLISH_SCOPE`. For example, this publishes installable packages such as `@yousiki/gajae-code` while preserving runtime `@gajae-code/*` import specifiers through npm aliases:
+
+```sh
+GJC_PUBLISH_SCOPE=@yousiki bun scripts/ci-release-publish.ts --dry-run
+GJC_PUBLISH_SCOPE=@yousiki bun scripts/ci-release-publish.ts
+```
+
+The final user install command is:
+
+```sh
+bun install -g @yousiki/gajae-code
+```
+
 Default workflow definitions live in source, not committed `.gjc` copies:
 
 ```text

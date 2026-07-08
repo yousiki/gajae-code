@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { normalizeFileDependencySpec, packages as publishPackages } from "./ci-release-publish";
+import {
+	normalizeFileDependencySpec,
+	normalizePublishScope,
+	packages as publishPackages,
+	publishPackageNameForScope,
+	resolvePublishDependency,
+} from "./ci-release-publish";
 
 interface PackageManifest {
 	name: string;
@@ -50,6 +56,33 @@ describe("unscoped gajae-code package publication", () => {
 			"file:///tmp/gajae-code/packages/ai",
 		);
 		expect(normalizeFileDependencySpec("catalog:")).toBe("catalog:");
+	});
+
+	test("fork publish scope rewrites package names and aliases workspace dependencies", async () => {
+		const previousScope = process.env.GJC_PUBLISH_SCOPE;
+		const codingAgentManifest = await readManifest("packages/coding-agent");
+		const nativePlatformManifest = await readManifest("packages/natives-linux-x64");
+
+		try {
+			process.env.GJC_PUBLISH_SCOPE = "@yousiki";
+
+			expect(normalizePublishScope("yousiki")).toBe("@yousiki");
+			expect(publishPackageNameForScope("gajae-code")).toBe("@yousiki/gajae-code");
+			expect(publishPackageNameForScope("@gajae-code/coding-agent")).toBe("@yousiki/coding-agent");
+			expect(await resolvePublishDependency("@gajae-code/coding-agent", "catalog:")).toBe(
+				`npm:@yousiki/coding-agent@${codingAgentManifest.version}`,
+			);
+			expect(await resolvePublishDependency("@gajae-code/natives-linux-x64", "workspace:*")).toBe(
+				`npm:@yousiki/natives-linux-x64@${nativePlatformManifest.version}`,
+			);
+			expect(await resolvePublishDependency("chalk", "catalog:")).toBe("^5.6.2");
+		} finally {
+			if (previousScope === undefined) {
+				delete process.env.GJC_PUBLISH_SCOPE;
+			} else {
+				process.env.GJC_PUBLISH_SCOPE = previousScope;
+			}
+		}
 	});
 
 	test("release publish order publishes the alias after its scoped dependency", async () => {
@@ -180,6 +213,13 @@ describe("native release binary coverage", () => {
 		expect(workflow).toContain("{ os: macos-14, platform: darwin, arch: arm64 }");
 		expect(workflow).toContain("target_id: darwin-arm64");
 		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
+	});
+
+	test("release workflow publishes npm packages under the fork scope", async () => {
+		const workflow = await Bun.file(path.join(repoRoot, ".github/workflows/ci.yml")).text();
+
+		expect(workflow).toContain('GJC_PUBLISH_SCOPE: "@yousiki"');
+		expect(workflow).toContain("run: bun run ci:release:publish");
 	});
 
 	test("installer explains missing release assets with fallback guidance", async () => {

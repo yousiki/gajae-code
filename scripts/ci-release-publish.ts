@@ -80,6 +80,25 @@ const dependencyFieldNames = [
 
 let rootCatalog: Readonly<Record<string, string>> | undefined;
 let workspaceVersions: Readonly<Record<string, string>> | undefined;
+let publishedWorkspaceNames: ReadonlySet<string> | undefined;
+
+export function normalizePublishScope(rawScope: string | undefined = process.env.GJC_PUBLISH_SCOPE): string | null {
+	if (rawScope === undefined) return null;
+	const trimmed = rawScope.trim();
+	if (trimmed === "") return null;
+	const scope = (trimmed.startsWith("@") ? trimmed : `@${trimmed}`).toLowerCase();
+	if (!/^@[a-z0-9][a-z0-9._-]*$/.test(scope)) {
+		throw new Error(`Invalid GJC_PUBLISH_SCOPE: ${rawScope}`);
+	}
+	return scope;
+}
+
+export function publishPackageNameForScope(name: string, scope: string | null = normalizePublishScope()): string {
+	if (scope === null) return name;
+	if (name === "gajae-code") return `${scope}/gajae-code`;
+	if (name.startsWith("@gajae-code/")) return `${scope}/${name.slice("@gajae-code/".length)}`;
+	return name;
+}
 
 function asStringRecord(value: JsonValue | undefined): Record<string, string> {
 	if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) return {};
@@ -114,6 +133,32 @@ async function loadWorkspaceVersions(): Promise<Readonly<Record<string, string>>
 	workspaceVersions = versions;
 	return workspaceVersions;
 }
+async function loadPublishedWorkspaceNames(): Promise<ReadonlySet<string>> {
+	if (publishedWorkspaceNames !== undefined) return publishedWorkspaceNames;
+	const names = new Set<string>();
+	for (const pkg of packages) {
+		const manifest = (await Bun.file(path.join(repoRoot, pkg.dir, "package.json")).json()) as PackageManifest;
+		if (typeof manifest.name === "string") names.add(manifest.name);
+	}
+	publishedWorkspaceNames = names;
+	return publishedWorkspaceNames;
+}
+
+async function resolvePublishDependencyAlias(name: string, resolved: string): Promise<string> {
+	const scope = normalizePublishScope();
+	if (scope === null || resolved.startsWith("file:")) return resolved;
+	const publishedNames = await loadPublishedWorkspaceNames();
+	if (!publishedNames.has(name)) return resolved;
+	const scopedName = publishPackageNameForScope(name, scope);
+	return scopedName === name ? resolved : `npm:${scopedName}@${resolved}`;
+}
+
+function rewritePackageName(manifest: PackageManifest): void {
+	if (typeof manifest.name === "string") {
+		manifest.name = publishPackageNameForScope(manifest.name);
+	}
+}
+
 
 export function normalizeFileDependencySpec(spec: string): string {
 	if (!spec.startsWith("file:")) return spec;
@@ -138,9 +183,9 @@ export async function resolvePublishDependency(name: string, spec: string): Prom
 		const versions = await loadWorkspaceVersions();
 		const workspaceVersion = versions[name];
 		if (workspaceVersion === undefined) throw new Error(`Missing workspace package version for ${name}`);
-		return workspaceVersion;
+		resolved = workspaceVersion;
 	}
-	return normalizeFileDependencySpec(resolved);
+	return resolvePublishDependencyAlias(name, normalizeFileDependencySpec(resolved));
 }
 
 async function rewriteDependencyFields(manifest: PackageManifest): Promise<void> {
@@ -184,6 +229,7 @@ async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): P
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	await rewriteDependencyFields(manifest);
+	rewritePackageName(manifest);
 	if (typeof manifest.types === "string" && manifest.types.startsWith("./src/")) {
 		manifest.types = rewriteSrcPath(manifest.types);
 	}
@@ -203,6 +249,7 @@ async function rewriteNativeManifest(pkgDir: string): Promise<PackageManifest> {
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	await rewriteDependencyFields(manifest);
+	rewritePackageName(manifest);
 	await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 	return manifest;
 }
@@ -256,10 +303,17 @@ async function readPackageManifest(pkgDir: string): Promise<PackageManifest> {
 	return (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
 }
 
+async function readDryRunManifest(pkgDir: string): Promise<PackageManifest> {
+	const manifest = await readPackageManifest(pkgDir);
+	await rewriteDependencyFields(manifest);
+	rewritePackageName(manifest);
+	return manifest;
+}
+
 
 async function publishPackage(pkg: PublishPackage): Promise<void> {
 	const pkgDir = path.join(repoRoot, pkg.dir);
-	const manifest = isDryRun ? await readPackageManifest(pkgDir) : await preparePackage(pkg);
+	const manifest = isDryRun ? await readDryRunManifest(pkgDir) : await preparePackage(pkg);
 	const name = manifest.name ?? path.basename(pkg.dir);
 	if (manifest.private) {
 		console.log(`Skipping ${name} (private)`);
@@ -267,7 +321,7 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 	}
 	if (isDryRun) {
 		if (pkg.kind === "native-platform") await stageNativePlatformArtifacts(pkg);
-		console.log(`DRY RUN npm publish --access public (${pkg.dir})`);
+		console.log(`DRY RUN npm publish --access public ${name} (${pkg.dir})`);
 		return;
 	}
 	const version = typeof manifest.version === "string" ? manifest.version : undefined;

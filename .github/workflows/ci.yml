@@ -535,4 +535,5 @@ jobs:
            env:
               NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+              GJC_PUBLISH_SCOPE: "@yousiki"
            run: bun run ci:release:publish
