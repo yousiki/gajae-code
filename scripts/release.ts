@@ -28,6 +28,15 @@ function git(args: readonly string[]) {
 	return $`git -c core.fsmonitor=false -c core.untrackedCache=false ${args}`;
 }
 
+async function replaceInFile(filePath: string, pattern: RegExp, replacement: string, label: string): Promise<void> {
+	const content = await Bun.file(filePath).text();
+	const next = content.replace(pattern, replacement);
+	if (next === content) {
+		throw new Error(`Failed to update ${label} in ${filePath}`);
+	}
+	await Bun.write(filePath, next);
+}
+
 // =============================================================================
 // Shared functions
 // =============================================================================
@@ -315,7 +324,9 @@ async function cmdRelease(version: string): Promise<void> {
 		publicPkgPaths.push(pkgPath);
 	}
 
-	await $`sd '"version": "[^"]+"' ${`"version": "${version}"`} ${publicPkgPaths}`;
+	for (const pkgPath of publicPkgPaths) {
+		await replaceInFile(pkgPath, /("version":\s*)"[^"]+"/, `$1"${version}"`, "package version");
+	}
 
 	// Verify
 	console.log("  Verifying versions:");
@@ -337,7 +348,7 @@ async function cmdRelease(version: string): Promise<void> {
 
 	// 3. Update Rust workspace version
 	console.log(`Updating Rust workspace version to ${version}…`);
-	await $`sd '^version = "[^"]+"' ${`version = "${version}"`} Cargo.toml`;
+	await replaceInFile("Cargo.toml", /(^version = ")[^"]+(")/m, `$1${version}$2`, "Rust workspace version");
 
 	// Verify
 	const cargoToml = await Bun.file("Cargo.toml").text();
@@ -374,7 +385,9 @@ async function cmdRelease(version: string): Promise<void> {
 		"packages/natives/native/index.d.ts",
 		"packages/natives/native/index.js",
 	];
-	await $`sd '__piNativesV[A-Za-z0-9_]+' ${sentinelName} ${sentinelFiles}`;
+	for (const filePath of sentinelFiles) {
+		await replaceInFile(filePath, /__piNativesV[A-Za-z0-9_]+/g, sentinelName, "pi-natives version sentinel");
+	}
 	const libRs = await Bun.file("crates/pi-natives/src/lib.rs").text();
 	if (!libRs.includes(`js_name = "${sentinelName}"`)) {
 		console.error(
