@@ -50,16 +50,26 @@ async function verifyThemeDefaults(): Promise<GateResult> {
 		.filter(([left, right]) => resolveColor(colors[left], vars) === resolveColor(colors[right], vars))
 		.map(([left, right]) => `${left} matches ${right}`);
 
-	const expectedBuiltIns = ["blue-crab", "claude-code", "codex", "gruvbox-dark", "opencode", "red-claw"];
+	const expectedBuiltIns = [
+		"blue-crab",
+		"catppuccin-frappe",
+		"catppuccin-latte",
+		"catppuccin-macchiato",
+		"catppuccin-mocha",
+		"claude-code",
+		"codex",
+		"gruvbox-dark",
+		"opencode",
+		"red-claw",
+	];
+	const themeExportPresent = (name: string) => {
+		const variableName = name.replaceAll("-", "_");
+		return variableName === name ? defaultIndex.includes(`\t${name},`) : defaultIndex.includes(`"${name}": ${variableName}`);
+	};
 	const retainedBuiltIns =
 		[...defaultIndex.matchAll(/^import /gm)].length === expectedBuiltIns.length &&
 		[...defaultIndex.matchAll(/^\t/gm)].length === expectedBuiltIns.length &&
-		defaultIndex.includes('"blue-crab": blue_crab') &&
-		defaultIndex.includes('"claude-code": claude_code') &&
-		defaultIndex.includes("\tcodex,") &&
-		defaultIndex.includes('"gruvbox-dark": gruvbox_dark') &&
-		defaultIndex.includes("\topencode,") &&
-		defaultIndex.includes('"red-claw": red_claw') &&
+		expectedBuiltIns.every(themeExportPresent) &&
 		!defaultIndex.includes("dark_") &&
 		!defaultIndex.includes("light_") &&
 		isRecord(blueCrab.colors);
