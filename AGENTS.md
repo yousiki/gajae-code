@@ -2,6 +2,14 @@
 
 Gajae-Code (`gjc`) is this repository's coding-agent implementation. Treat this file as the repo-local operating contract for contributors and automated agents working in this tree.
 
+## Fork and upstream safety
+
+This checkout is a personal fork. Treat `https://github.com/yousiki/gajae-code` as the only writable repository for agent work. `origin` must fetch and push that fork.
+
+Treat `https://github.com/Yeachan-Heo/gajae-code` as upstream read-only sync input. Agents may fetch, compare, merge, rebase, or cherry-pick from `upstream`, but must never push branches, tags, releases, issues, comments, or pull requests to `Yeachan-Heo/gajae-code`.
+
+Before any `git push`, release, PR creation, branch publication, or GitHub mutation, verify the resolved target owner/repo is `yousiki/gajae-code`. If a command targets `Yeachan-Heo/gajae-code`, stop and correct the remote or repository target first.
+
 ## Public workflow surface
 
 GJC intentionally exposes exactly four default workflow skills. Do not add, document, install, or route to additional default workflow definitions without an explicit product decision and gate update. GJC also bundles exactly four source-defined task role agents for delegation; these are not workflow skills and are not committed repo-visible `.gjc` defaults.
