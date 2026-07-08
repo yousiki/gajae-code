@@ -98,7 +98,7 @@ Invalid override keys are ignored and logged (`logger.debug`).
 
 Theme lookup order (`loadThemeJson`):
 
-1. built-in embedded themes (`red-claw.json`, `blue-crab.json`, `claude-code.json`, `codex.json`, and `opencode.json` compiled into `defaultThemes`)
+1. built-in embedded themes (`red-claw.json`, `blue-crab.json`, `claude-code.json`, `codex.json`, `opencode.json`, `catppuccin-latte.json`, `catppuccin-frappe.json`, `catppuccin-macchiato.json`, and `catppuccin-mocha.json` compiled into `defaultThemes`)
 2. custom theme file: `<customThemesDir>/<name>.json`
 
 Custom themes directory comes from `getCustomThemesDir()`:
@@ -163,7 +163,7 @@ Auto theme slot selection uses terminal appearance in this order:
 3. macOS appearance fallback only for the known-broken macOS/Zellij OSC 11 path
 4. dark slot fallback
 
-Built-in theme note: `red-claw` is the default dark GJC theme, and `blue-crab` is the default light-slot theme. Both are crustacean brand themes with separate semantic error/warning/diff-removal tokens and crab-oriented symbol overrides. Three additional bundled migration themes — `claude-code`, `codex`, and `opencode` — mirror the look of those tools for easy eye-migration. All three are dark-classified and recommended for `theme.dark`, but are selectable in either slot; they keep GJC's default symbol identity (no crab-symbol overrides).
+Built-in theme note: `red-claw` is the default dark GJC theme, and `blue-crab` is the default light-slot theme. Both are crustacean brand themes with separate semantic error/warning/diff-removal tokens and crab-oriented symbol overrides. Additional selectable built-ins include the migration themes `claude-code`, `codex`, and `opencode`, plus Catppuccin variants `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, and `catppuccin-mocha`. Latte is light-classified and the other Catppuccin variants are dark-classified; all selectable built-ins can still be used in either slot. Catppuccin and migration themes keep GJC's default symbol identity (no crab-symbol overrides).
 
 Current defaults from settings schema:
 
@@ -234,7 +234,7 @@ Legacy migration exists: old flat `theme: "name"` is migrated to nested `theme.d
 1. Create file in custom themes dir, e.g. `~/.gjc/agent/themes/my-theme.json`.
 2. Include `name`, optional `vars`, and **all required** `colors` tokens.
 3. Optionally include `symbols` and `export`.
-4. Select the theme in Settings (`Display -> Dark theme` or `Display -> Light theme`) depending on which auto slot you want. All bundled themes are selectable: the crustacean defaults `red-claw` and `blue-crab`, plus the migration themes `claude-code`, `codex`, and `opencode` (dark-classified, recommended for the dark slot but selectable in either).
+4. Select the theme in Settings (`Appearance -> Dark theme` or `Light theme`) depending on which auto slot you want. All bundled themes are selectable, including the crustacean defaults `red-claw` and `blue-crab`, the migration themes `claude-code`, `codex`, and `opencode`, and the Catppuccin variants `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, and `catppuccin-mocha`.
 
 Minimal skeleton:
 
