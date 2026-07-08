@@ -25,6 +25,9 @@
 - Mac Option+Enter no longer collides with the queue-message binding.
 - Telegram completion notifications suppress dot-only messages, and Telegram-originated input is shown immediately and recorded in prompt history.
 - The computer red-team CI gate avoids false positives from non-computer-control changes.
+### Added
+
+- Added Catppuccin Latte, Frappé, Macchiato, and Mocha as built-in theme options.
 
 ## [0.9.0] - 2026-07-07
 ### Added

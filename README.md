@@ -257,7 +257,7 @@ retry:
 
 ## TUI identity
 
-The default dark TUI identity is the GJC red-claw theme, while light-appearance terminals default to the bundled blue-crab theme. Three additional bundled migration themes — `claude-code`, `codex`, and `opencode` — mirror the look of those tools for easy eye-migration and are selectable from Settings or `/theme`. Explicit user theme settings still win.
+The default dark TUI identity is the GJC red-claw theme, while light-appearance terminals default to the bundled blue-crab theme. Other selectable built-in themes are available for users who want a familiar palette from another tool or ecosystem. Explicit user theme settings still win.
 
 ### Bundled theme grid
 
@@ -270,6 +270,10 @@ Pick from Settings (`Appearance -> Dark theme` / `Light theme`) or `/theme`.
 | `claude-code` | Claude Code-inspired dark palette with terracotta and pink highlights. | Claude Code muscle memory without leaving GJC. |
 | `codex` | Crisp dark blue-gray palette with sharper coding-session contrast. | A Codex-like dark workspace. |
 | `opencode` | OpenCode-inspired dark palette with punchier terminal accents. | OpenCode muscle memory in the bundled picker. |
+| `catppuccin-latte` | Catppuccin Latte palette mapped to GJC theme tokens. | Optional light palette. |
+| `catppuccin-frappe` | Catppuccin Frappé palette mapped to GJC theme tokens. | Optional dark palette. |
+| `catppuccin-macchiato` | Catppuccin Macchiato palette mapped to GJC theme tokens. | Optional dark palette. |
+| `catppuccin-mocha` | Catppuccin Mocha palette mapped to GJC theme tokens. | Optional dark palette. |
 
 ## Development
 
@@ -334,7 +338,7 @@ Thanks to the people and agents helping shape the early Gajae-Code releases, inc
 
 ## Inspirations and lineage
 
-Gajae-Code's default TUI identity is the crustacean pair: red-claw for dark appearance and blue-crab for light appearance. It also bundles `claude-code`, `codex`, and `opencode` migration themes whose palettes are inspired by those tools so users moving from them get a familiar look. It builds on lessons from a small family of agent harnesses while keeping the public GJC surface intentionally focused. Historical attribution is kept in [`NOTICE.md`](NOTICE.md).
+Gajae-Code's default TUI identity is the crustacean pair: red-claw for dark appearance and blue-crab for light appearance. It builds on lessons from a small family of agent harnesses while keeping the public GJC surface intentionally focused. Historical attribution is kept in [`NOTICE.md`](NOTICE.md).
 
 ## License
 
