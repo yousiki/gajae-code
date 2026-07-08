@@ -6,6 +6,7 @@ import {
 	packages as publishPackages,
 	publishPackageNameForScope,
 	resolvePublishDependency,
+	sourcePackageNameForPublishScope,
 } from "./ci-release-publish";
 
 interface PackageManifest {
@@ -75,6 +76,10 @@ describe("unscoped gajae-code package publication", () => {
 			expect(await resolvePublishDependency("@gajae-code/natives-linux-x64", "workspace:*")).toBe(
 				`npm:@yousiki/natives-linux-x64@${nativePlatformManifest.version}`,
 			);
+			expect(sourcePackageNameForPublishScope("@yousiki/natives-linux-x64", "@yousiki")).toBe(
+				"@gajae-code/natives-linux-x64",
+			);
+			expect(sourcePackageNameForPublishScope("@yousiki/gajae-code", "@yousiki")).toBe("gajae-code");
 			expect(await resolvePublishDependency("chalk", "catalog:")).toBe("^5.6.2");
 		} finally {
 			if (previousScope === undefined) {
@@ -111,6 +116,15 @@ describe("unscoped gajae-code package publication", () => {
 			expect(platformIndex).toBeGreaterThan(-1);
 			expect(platformIndex).toBeLessThan(nativesIndex);
 		}
+	});
+
+	test("release entrypoint primes workspace names before mutating manifests", async () => {
+		const releaseScript = await Bun.file(path.join(repoRoot, "scripts/ci-release-publish.ts")).text();
+		const primeIndex = releaseScript.indexOf("await primePublishMetadata();");
+		const publishLoopIndex = releaseScript.lastIndexOf("for (const pkg of packages)");
+
+		expect(primeIndex).toBeGreaterThan(-1);
+		expect(publishLoopIndex).toBeGreaterThan(primeIndex);
 	});
 
 	test("stable natives package delegates binaries to optional platform packages", async () => {

@@ -99,6 +99,18 @@ export function publishPackageNameForScope(name: string, scope: string | null = 
 	if (name.startsWith("@gajae-code/")) return `${scope}/${name.slice("@gajae-code/".length)}`;
 	return name;
 }
+export function sourcePackageNameForPublishScope(name: string, scope: string | null = normalizePublishScope()): string | null {
+	if (scope === null || !name.startsWith(`${scope}/`)) return null;
+	const packageId = name.slice(scope.length + 1);
+	return packageId === "gajae-code" ? "gajae-code" : `@gajae-code/${packageId}`;
+}
+
+function packageNameAliasesForCurrentScope(name: string): readonly string[] {
+	const sourceName = sourcePackageNameForPublishScope(name);
+	if (sourceName === null || sourceName === name) return [name];
+	return [sourceName, name];
+}
+
 
 function asStringRecord(value: JsonValue | undefined): Record<string, string> {
 	if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) return {};
@@ -127,7 +139,9 @@ async function loadWorkspaceVersions(): Promise<Readonly<Record<string, string>>
 	for (const pkg of packages) {
 		const manifest = (await Bun.file(path.join(repoRoot, pkg.dir, "package.json")).json()) as PackageManifest;
 		if (typeof manifest.name === "string" && typeof manifest.version === "string") {
-			versions[manifest.name] = manifest.version;
+			for (const name of packageNameAliasesForCurrentScope(manifest.name)) {
+				versions[name] = manifest.version;
+			}
 		}
 	}
 	workspaceVersions = versions;
@@ -138,10 +152,18 @@ async function loadPublishedWorkspaceNames(): Promise<ReadonlySet<string>> {
 	const names = new Set<string>();
 	for (const pkg of packages) {
 		const manifest = (await Bun.file(path.join(repoRoot, pkg.dir, "package.json")).json()) as PackageManifest;
-		if (typeof manifest.name === "string") names.add(manifest.name);
+		if (typeof manifest.name === "string") {
+			for (const name of packageNameAliasesForCurrentScope(manifest.name)) {
+				names.add(name);
+			}
+		}
 	}
 	publishedWorkspaceNames = names;
 	return publishedWorkspaceNames;
+}
+
+export async function primePublishMetadata(): Promise<void> {
+	await Promise.all([loadWorkspaceVersions(), loadPublishedWorkspaceNames()]);
 }
 
 async function resolvePublishDependencyAlias(name: string, resolved: string): Promise<string> {
@@ -340,6 +362,7 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	await primePublishMetadata();
 	for (const pkg of packages) {
 		await publishPackage(pkg);
 	}
