@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * Release script for pi-mono
+ * Release script for the Gajae-Code fork
  *
  * Usage:
- *   bun scripts/release.ts <version>   Full release (preflight, version, changelog, commit, push, watch)
- *   bun scripts/release.ts watch       Watch CI for current commit
+ *   bun scripts/release.ts <upstream-version>-yousiki.<revision>
+ *   bun scripts/release.ts watch
  *
- * Example: bun scripts/release.ts 3.10.0
+ * Example: bun scripts/release.ts 0.9.1-yousiki.1
  */
 
 import { $, Glob } from "bun";
@@ -14,6 +14,15 @@ import { $, Glob } from "bun";
 const changelogGlob = new Glob("packages/*/CHANGELOG.md");
 const packageJsonGlob = new Glob("packages/*/package.json");
 const cargoTomlGlob = new Glob("crates/*/Cargo.toml");
+const FORK_RELEASE_OWNER = "yousiki";
+const FORK_RELEASE_VERSION_RE = /^(\d+\.\d+\.\d+)-yousiki\.(\d+)$/;
+const SEMVER_BASE_RE = /^(\d+\.\d+\.\d+)(?:-.+)?$/;
+
+export interface ForkReleaseVersion {
+	version: string;
+	upstreamVersion: string;
+	revision: number;
+}
 
 function git(args: readonly string[]) {
 	return $`git -c core.fsmonitor=false -c core.untrackedCache=false ${args}`;
@@ -131,7 +140,7 @@ function hasUnreleasedContent(content: string): boolean {
 
 function removeEmptyVersionEntries(content: string): string {
 	// Remove version entries that have no content (just whitespace until next ## [ or EOF)
-	return content.replace(/## \[\d+\.\d+\.\d+\] - \d{4}-\d{2}-\d{2}\s*\n(?=## \[|\s*$)/g, "");
+	return content.replace(/## \[\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\] - \d{4}-\d{2}-\d{2}\s*\n(?=## \[|\s*$)/g, "");
 }
 
 async function updateChangelogsForRelease(version: string): Promise<void> {
@@ -169,18 +178,89 @@ async function cmdWatch(): Promise<void> {
 	process.exit(success ? 0 : 1);
 }
 
-function parseVersion(v: string): [number, number, number] {
-	const match = v.replace(/^v/, "").match(/^(\d+)\.(\d+)\.(\d+)/);
-	if (!match) throw new Error(`Invalid version: ${v}`);
-	return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+export function isForkReleaseVersion(version: string): boolean {
+	return FORK_RELEASE_VERSION_RE.test(version.replace(/^v/, ""));
 }
 
-function compareVersions(a: string, b: string): number {
-	const [aMajor, aMinor, aPatch] = parseVersion(a);
-	const [bMajor, bMinor, bPatch] = parseVersion(b);
-	if (aMajor !== bMajor) return aMajor - bMajor;
-	if (aMinor !== bMinor) return aMinor - bMinor;
-	return aPatch - bPatch;
+export function parseForkReleaseVersion(version: string): ForkReleaseVersion {
+	const normalized = version.replace(/^v/, "");
+	const match = FORK_RELEASE_VERSION_RE.exec(normalized);
+	if (!match) {
+		throw new Error(
+			`Fork release version must match <upstream-version>-${FORK_RELEASE_OWNER}.<revision> (example: 0.9.1-yousiki.1): ${version}`,
+		);
+	}
+
+	const revision = Number.parseInt(match[2], 10);
+	if (!Number.isSafeInteger(revision) || revision < 1) {
+		throw new Error(`Fork release revision must be a positive integer: ${version}`);
+	}
+
+	return {
+		version: normalized,
+		upstreamVersion: match[1],
+		revision,
+	};
+}
+
+export function upstreamBaseVersionOf(version: string): string {
+	const normalized = version.replace(/^v/, "");
+	const forkMatch = FORK_RELEASE_VERSION_RE.exec(normalized);
+	if (forkMatch) return forkMatch[1];
+
+	const baseMatch = SEMVER_BASE_RE.exec(normalized);
+	if (!baseMatch) throw new Error(`Invalid package version: ${version}`);
+	return baseMatch[1];
+}
+
+function forkRevisionForTag(tag: string, upstreamVersion: string): number | null {
+	const normalized = tag.replace(/^v/, "");
+	const match = FORK_RELEASE_VERSION_RE.exec(normalized);
+	if (!match || match[1] !== upstreamVersion) return null;
+
+	const revision = Number.parseInt(match[2], 10);
+	return Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+}
+
+export function nextForkReleaseVersion(upstreamVersion: string, existingTags: readonly string[]): string {
+	let highestRevision = 0;
+	for (const tag of existingTags) {
+		const revision = forkRevisionForTag(tag, upstreamVersion);
+		if (revision !== null && revision > highestRevision) highestRevision = revision;
+	}
+	return `${upstreamVersion}-${FORK_RELEASE_OWNER}.${highestRevision + 1}`;
+}
+
+export function validateForkReleaseVersion(
+	version: string,
+	currentPackageVersion: string,
+	existingTags: readonly string[],
+): ForkReleaseVersion {
+	const parsed = parseForkReleaseVersion(version);
+	const currentBase = upstreamBaseVersionOf(currentPackageVersion);
+	if (parsed.upstreamVersion !== currentBase) {
+		throw new Error(
+			`Fork release ${parsed.version} is based on upstream ${parsed.upstreamVersion}, but the current package base is ${currentBase}. Sync or select the matching upstream base first.`,
+		);
+	}
+
+	const expected = nextForkReleaseVersion(parsed.upstreamVersion, existingTags);
+	if (parsed.version !== expected) {
+		throw new Error(`Fork release version must be the next fork revision for upstream ${parsed.upstreamVersion}: expected ${expected}, got ${parsed.version}`);
+	}
+
+	return parsed;
+}
+
+async function readCurrentPackageVersion(): Promise<string> {
+	const manifest = (await Bun.file("packages/coding-agent/package.json").json()) as { version?: string };
+	if (typeof manifest.version !== "string") throw new Error("packages/coding-agent/package.json is missing version");
+	return manifest.version;
+}
+
+async function readForkReleaseTags(upstreamVersion: string): Promise<string[]> {
+	const output = await git(["tag", "--list", `v${upstreamVersion}-${FORK_RELEASE_OWNER}.*`]).text();
+	return output.split(/\r?\n/).filter(Boolean);
 }
 
 async function cmdRelease(version: string): Promise<void> {
@@ -204,12 +284,21 @@ async function cmdRelease(version: string): Promise<void> {
 	}
 	console.log("  Working directory clean");
 
-	const latestTag = (await git(["describe", "--tags", "--abbrev=0"]).text()).trim();
-	if (compareVersions(version, latestTag) <= 0) {
-		console.error(`Error: Version ${version} must be greater than latest tag ${latestTag}`);
+	let forkVersion: ForkReleaseVersion;
+	try {
+		const currentPackageVersion = await readCurrentPackageVersion();
+		const requestedForkVersion = parseForkReleaseVersion(version);
+		const forkReleaseTags = await readForkReleaseTags(requestedForkVersion.upstreamVersion);
+		forkVersion = validateForkReleaseVersion(version, currentPackageVersion, forkReleaseTags);
+		version = forkVersion.version;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`Error: ${message}`);
 		process.exit(1);
 	}
-	console.log(`  Version ${version} > ${latestTag}\n`);
+	console.log(
+		`  Fork release ${forkVersion.version} (upstream ${forkVersion.upstreamVersion}, revision ${forkVersion.revision})\n`,
+	);
 
 	// 2. Update package versions
 	console.log(`Updating package versions to ${version}…`);
@@ -359,23 +448,34 @@ async function cmdRelease(version: string): Promise<void> {
 // Main
 // =============================================================================
 
-const arg = process.argv[2];
-
-if (!arg) {
+function printUsage(): void {
 	console.error("Usage:");
-	console.error("  bun scripts/release.ts <version>   Full release");
+	console.error(`  bun scripts/release.ts <upstream-version>-${FORK_RELEASE_OWNER}.<revision>   Full release`);
 	console.error("  bun scripts/release.ts watch       Watch CI for current commit");
+}
+
+async function main(): Promise<void> {
+	const arg = process.argv[2];
+
+	if (!arg) {
+		printUsage();
+		process.exit(1);
+	}
+
+	if (arg === "watch") {
+		await cmdWatch();
+		return;
+	}
+	if (isForkReleaseVersion(arg)) {
+		await cmdRelease(arg);
+		return;
+	}
+
+	console.error(`Unknown command or invalid fork release version: ${arg}`);
+	printUsage();
 	process.exit(1);
 }
 
-if (arg === "watch") {
-	await cmdWatch();
-} else if (/^\d+\.\d+\.\d+/.test(arg)) {
-	await cmdRelease(arg);
-} else {
-	console.error(`Unknown command or invalid version: ${arg}`);
-	console.error("Usage:");
-	console.error("  bun scripts/release.ts <version>   Full release");
-	console.error("  bun scripts/release.ts watch       Watch CI for current commit");
-	process.exit(1);
+if (import.meta.main) {
+	await main();
 }

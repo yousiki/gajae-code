@@ -6,6 +6,7 @@ import * as path from "node:path";
 import type { BinaryUpdateFlow } from "../src/cli/update-cli";
 import {
 	buildReleaseBinaryUrlForTest,
+	compareVersionsForTest,
 	formatBinaryDownloadFailureMessageForTest,
 	formatManualUpdateInstructionsForTest,
 	formatVerificationFailureForTest,
@@ -173,6 +174,15 @@ describe("update-cli binary release assets", () => {
 		expect(() => buildReleaseBinaryUrlForTest("0.2.3", "freebsd", "x64")).toThrow(
 			"bun install -g @gajae-code/coding-agent@latest",
 		);
+	});
+});
+
+describe("update-cli fork release version ordering", () => {
+	it("treats fork revisions as newer than their upstream base", () => {
+		expect(compareVersionsForTest("0.9.1-yousiki.1", "0.9.1")).toBeGreaterThan(0);
+		expect(compareVersionsForTest("0.9.1-yousiki.2", "0.9.1-yousiki.1")).toBeGreaterThan(0);
+		expect(compareVersionsForTest("0.9.2-yousiki.1", "0.9.1-yousiki.99")).toBeGreaterThan(0);
+		expect(compareVersionsForTest("0.9.1", "0.9.1-yousiki.1")).toBeLessThan(0);
 	});
 });
 

@@ -10,6 +10,8 @@ Treat `https://github.com/Yeachan-Heo/gajae-code` as upstream read-only sync inp
 
 Before any `git push`, release, PR creation, branch publication, or GitHub mutation, verify the resolved target owner/repo is `yousiki/gajae-code`. If a command targets `Yeachan-Heo/gajae-code`, stop and correct the remote or repository target first.
 
+Fork npm releases must use `<upstream-version>-yousiki.<revision>` versions (for example `0.9.1-yousiki.1`). Keep every public workspace package on the same fork release version. When upstream base changes, reset the fork revision to `.1`; when only fork changes accumulate on the same upstream base, increment the fork revision by one. Do not publish bare upstream versions from this fork.
+
 ## Public workflow surface
 
 GJC intentionally exposes exactly four default workflow skills. Do not add, document, install, or route to additional default workflow definitions without an explicit product decision and gate update. GJC also bundles exactly four source-defined task role agents for delegation; these are not workflow skills and are not committed repo-visible `.gjc` defaults.

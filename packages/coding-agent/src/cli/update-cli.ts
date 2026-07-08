@@ -23,6 +23,15 @@ interface ReleaseInfo {
 	version: string;
 }
 
+interface ComparableVersion {
+	major: number;
+	minor: number;
+	patch: number;
+	forkRevision: number;
+}
+
+const FORK_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-yousiki\.(\d+))?$/;
+
 /** Result from running the installed binary and parsing its reported version. */
 export interface InstalledVersionVerification {
 	ok: boolean;
@@ -221,21 +230,38 @@ async function getLatestRelease(): Promise<ReleaseInfo> {
 }
 
 /**
- * Compare semver versions. Returns:
- * - negative if a < b
- * - 0 if a == b
- * - positive if a > b
+ * Compare versions in fork-release order. A fork release like
+ * 0.9.1-yousiki.1 is newer than its upstream base 0.9.1, and fork
+ * revisions on the same base increase monotonically.
  */
-function compareVersions(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
+function parseComparableVersion(version: string): ComparableVersion | undefined {
+	const match = FORK_VERSION_RE.exec(version.trim());
+	if (!match) return undefined;
+	const forkRevision = match[4] === undefined ? 0 : Number.parseInt(match[4], 10);
+	return {
+		major: Number.parseInt(match[1], 10),
+		minor: Number.parseInt(match[2], 10),
+		patch: Number.parseInt(match[3], 10),
+		forkRevision: Number.isSafeInteger(forkRevision) ? forkRevision : 0,
+	};
+}
 
-	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-		const na = pa[i] || 0;
-		const nb = pb[i] || 0;
-		if (na !== nb) return na - nb;
-	}
-	return 0;
+function compareParsedVersions(a: ComparableVersion, b: ComparableVersion): number {
+	if (a.major !== b.major) return a.major - b.major;
+	if (a.minor !== b.minor) return a.minor - b.minor;
+	if (a.patch !== b.patch) return a.patch - b.patch;
+	return a.forkRevision - b.forkRevision;
+}
+
+function compareVersions(a: string, b: string): number {
+	const parsedA = parseComparableVersion(a);
+	const parsedB = parseComparableVersion(b);
+	if (parsedA && parsedB) return compareParsedVersions(parsedA, parsedB);
+	return Bun.semver.order(a, b);
+}
+
+export function compareVersionsForTest(a: string, b: string): number {
+	return compareVersions(a, b);
 }
 
 /**
@@ -292,8 +318,8 @@ async function verifyInstalledVersion(expectedVersion: string): Promise<Installe
 		const result = await $`${ompPath} --version`.quiet().nothrow();
 		if (result.exitCode !== 0) return { ok: false, path: ompPath };
 		const output = result.text().trim();
-		// Output format: "gjc/X.Y.Z"
-		const match = output.match(/\/(\d+\.\d+\.\d+)/);
+		// Output format: "gjc/X.Y.Z" or "gjc/X.Y.Z-yousiki.N"
+		const match = output.match(/\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
 		const actual = match?.[1];
 		return { ok: actual === expectedVersion, actual, path: ompPath };
 	} catch {

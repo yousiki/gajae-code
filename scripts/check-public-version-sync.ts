@@ -23,7 +23,7 @@ type PublicFetch = (input: string | URL, init?: RequestInit) => Promise<Response
 
 const PUBLIC_HOMEPAGE = "https://gajae-code.com";
 const GENERATED_DOCS_INDEX = "packages/coding-agent/src/internal-urls/docs-index.generated.ts";
-const VERSIONED_MARKETING_RE = /\b(?:New in|Also new in|Gajae Code|Gajae-Code|Feature card for the)\s+(\d+\.\d+\.\d+)\b/gi;
+const VERSIONED_MARKETING_RE = /\b(?:New in|Also new in|Gajae Code|Gajae-Code|Feature card for the)\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/gi;
 const MARKETING_VERSION_FILES = ["README.md", "docs/**/*.md", "packages/*/README.md"];
 const LIVE_FETCH_TIMEOUT_MS = 5_000;
 
@@ -211,9 +211,9 @@ export async function checkLivePublicVersionSync(repoRoot = path.join(import.met
 	}
 
 	const homepage = await response.text();
-	const visibleVersion = homepage.match(/\bv(\d+\.\d+\.\d+)\b/i)?.[1];
+	const visibleVersion = homepage.match(/\bv(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/i)?.[1];
 	if (!visibleVersion) {
-		violations.push({ path: PUBLIC_HOMEPAGE, message: "Public homepage does not expose a visible vX.Y.Z version marker." });
+		violations.push({ path: PUBLIC_HOMEPAGE, message: "Public homepage does not expose a visible vX.Y.Z[-fork.N] version marker." });
 	} else if (visibleVersion !== canonicalVersion) {
 		violations.push({
 			path: PUBLIC_HOMEPAGE,

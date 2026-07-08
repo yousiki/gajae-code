@@ -5,7 +5,37 @@ export interface ChangelogEntry {
 	major: number;
 	minor: number;
 	patch: number;
+	version: string;
+	forkRevision: number;
 	content: string;
+}
+
+interface ChangelogVersion {
+	major: number;
+	minor: number;
+	patch: number;
+	version: string;
+	forkRevision: number;
+}
+
+const CHANGELOG_HEADING_VERSION_RE = /##\s+\[?((\d+)\.(\d+)\.(\d+)(?:-yousiki\.(\d+))?)\]?/;
+const PACKAGE_VERSION_RE = /^v?((\d+)\.(\d+)\.(\d+)(?:-yousiki\.(\d+))?)$/;
+
+function versionFromMatch(match: RegExpMatchArray): ChangelogVersion {
+	const forkRevision = match[5] === undefined ? 0 : Number.parseInt(match[5], 10);
+	return {
+		version: match[1],
+		major: Number.parseInt(match[2], 10),
+		minor: Number.parseInt(match[3], 10),
+		patch: Number.parseInt(match[4], 10),
+		forkRevision: Number.isSafeInteger(forkRevision) ? forkRevision : 0,
+	};
+}
+
+function parsePackageVersion(version: string): ChangelogVersion {
+	const match = PACKAGE_VERSION_RE.exec(version.trim());
+	if (!match) return { version: "0.0.0", major: 0, minor: 0, patch: 0, forkRevision: 0 };
+	return versionFromMatch(match);
 }
 
 /**
@@ -18,7 +48,7 @@ export function parseChangelogContent(content: string): ChangelogEntry[] {
 	const entries: ChangelogEntry[] = [];
 
 	let currentLines: string[] = [];
-	let currentVersion: { major: number; minor: number; patch: number } | null = null;
+	let currentVersion: ChangelogVersion | null = null;
 
 	for (const line of lines) {
 		// Check if this is a version header (## [x.y.z] ...)
@@ -32,13 +62,9 @@ export function parseChangelogContent(content: string): ChangelogEntry[] {
 			}
 
 			// Try to parse version from this line
-			const versionMatch = line.match(/##\s+\[?(\d+)\.(\d+)\.(\d+)\]?/);
+			const versionMatch = line.match(CHANGELOG_HEADING_VERSION_RE);
 			if (versionMatch) {
-				currentVersion = {
-					major: Number.parseInt(versionMatch[1], 10),
-					minor: Number.parseInt(versionMatch[2], 10),
-					patch: Number.parseInt(versionMatch[3], 10),
-				};
+				currentVersion = versionFromMatch(versionMatch);
 				currentLines = [line];
 			} else {
 				// Reset if we can't parse version
@@ -96,8 +122,14 @@ export function getInstalledVersionChangelogEntry(
 	entries: readonly ChangelogEntry[],
 	installedVersion: string,
 ): ChangelogEntry | undefined {
-	const [major = 0, minor = 0, patch = 0] = installedVersion.split(".").map(Number);
-	return entries.find(entry => entry.major === major && entry.minor === minor && entry.patch === patch) ?? entries[0];
+	const parsed = parsePackageVersion(installedVersion);
+	return (
+		entries.find(entry => entry.version === parsed.version) ??
+		entries.find(
+			entry => entry.major === parsed.major && entry.minor === parsed.minor && entry.patch === parsed.patch,
+		) ??
+		entries[0]
+	);
 }
 
 /**
@@ -106,19 +138,16 @@ export function getInstalledVersionChangelogEntry(
 export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number {
 	if (v1.major !== v2.major) return v1.major - v2.major;
 	if (v1.minor !== v2.minor) return v1.minor - v2.minor;
-	return v1.patch - v2.patch;
+	if (v1.patch !== v2.patch) return v1.patch - v2.patch;
+	return v1.forkRevision - v2.forkRevision;
 }
 
 /**
  * Get entries newer than lastVersion
  */
 export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
-	// Parse lastVersion
-	const parts = lastVersion.split(".").map(Number);
-	const last: ChangelogEntry = {
-		major: parts[0] || 0,
-		minor: parts[1] || 0,
-		patch: parts[2] || 0,
+	const last = {
+		...parsePackageVersion(lastVersion),
 		content: "",
 	};
 

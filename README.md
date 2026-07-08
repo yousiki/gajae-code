@@ -327,6 +327,18 @@ The final user install command is:
 bun install -g @yousiki-gajae-code/gajae-code
 ```
 
+Fork release versions use the upstream version plus a fork revision:
+
+```text
+<upstream-version>-yousiki.<revision>
+```
+
+Examples: `0.9.1-yousiki.1`, `0.9.1-yousiki.2`, then after syncing upstream `0.9.2`, `0.9.2-yousiki.1`. The release script enforces this convention, keeps all public workspace packages on the same version, and rejects bare upstream versions such as `0.9.2` for fork releases.
+
+```sh
+bun scripts/release.ts 0.9.1-yousiki.1
+```
+
 Default workflow definitions live in source, not committed `.gjc` copies:
 
 ```text

@@ -8,6 +8,13 @@ import {
 	resolvePublishDependency,
 	sourcePackageNameForPublishScope,
 } from "./ci-release-publish";
+import {
+	isForkReleaseVersion,
+	nextForkReleaseVersion,
+	parseForkReleaseVersion,
+	upstreamBaseVersionOf,
+	validateForkReleaseVersion,
+} from "./release";
 
 interface PackageManifest {
 	name: string;
@@ -35,15 +42,11 @@ describe("unscoped gajae-code package publication", () => {
 
 		expect(aliasManifest.private).toBeUndefined();
 		expect(aliasManifest.name).toBe("gajae-code");
-		// The unscoped wrapper may carry a patch-only hotfix version when an
-		// immutable npm publish has to be superseded without republishing the
-		// scoped CLI. Its dependency remains catalog-backed so the release
-		// publisher resolves it to the current @gajae-code/coding-agent version.
-		expect(aliasManifest.version).toMatch(/^\d+\.\d+\.\d+$/);
-		expect(aliasManifest.version.split(".").slice(0, 2)).toEqual(codingAgentManifest.version.split(".").slice(0, 2));
-		expect(Number(aliasManifest.version.split(".")[2])).toBeGreaterThanOrEqual(
-			Number(codingAgentManifest.version.split(".")[2]),
-		);
+		// The fork release script may bump every public package to an
+		// upstream-version-plus-fork-revision form like 0.9.1-yousiki.1.
+		// The wrapper and scoped CLI must still agree on the upstream base.
+		expect(aliasManifest.version).toMatch(/^\d+\.\d+\.\d+(?:-yousiki\.\d+)?$/);
+		expect(upstreamBaseVersionOf(aliasManifest.version)).toBe(upstreamBaseVersionOf(codingAgentManifest.version));
 		expect(aliasManifest.bin).toEqual({ gjc: "bin/gjc.js" });
 		expect(aliasManifest.dependencies?.["@gajae-code/coding-agent"]).toBe("catalog:");
 		const wrapper = await Bun.file(path.join(repoRoot, "packages/gajae-code/bin/gjc.js")).text();
@@ -187,6 +190,50 @@ describe("unscoped gajae-code package publication", () => {
 		expect(stdout).not.toContain("Building Tailwind CSS");
 		const after = await Promise.all(manifestPaths.map(async (relativePath) => await Bun.file(path.join(repoRoot, relativePath)).text()));
 		expect(after).toEqual(before);
+	});
+
+	describe("fork release versioning", () => {
+		test("accepts only upstream-version plus yousiki revision", () => {
+			expect(isForkReleaseVersion("0.9.1-yousiki.1")).toBe(true);
+			expect(isForkReleaseVersion("v0.9.1-yousiki.1")).toBe(true);
+			expect(isForkReleaseVersion("0.9.1")).toBe(false);
+			expect(isForkReleaseVersion("0.9.1-fork.1")).toBe(false);
+			expect(parseForkReleaseVersion("v0.9.1-yousiki.2")).toEqual({
+				version: "0.9.1-yousiki.2",
+				upstreamVersion: "0.9.1",
+				revision: 2,
+			});
+		});
+
+		test("derives the next fork revision from matching release tags", () => {
+			expect(nextForkReleaseVersion("0.9.1", [])).toBe("0.9.1-yousiki.1");
+			expect(
+				nextForkReleaseVersion("0.9.1", [
+					"v0.9.1",
+					"v0.9.1-yousiki.1",
+					"v0.9.1-yousiki.3",
+					"v0.9.2-yousiki.9",
+				]),
+			).toBe("0.9.1-yousiki.4");
+		});
+
+		test("requires the current upstream base and the next consecutive fork revision", () => {
+			expect(validateForkReleaseVersion("0.9.1-yousiki.1", "0.9.1", [])).toMatchObject({
+				version: "0.9.1-yousiki.1",
+				upstreamVersion: "0.9.1",
+				revision: 1,
+			});
+			expect(validateForkReleaseVersion("0.9.1-yousiki.2", "0.9.1-yousiki.1", ["v0.9.1-yousiki.1"]))
+				.toMatchObject({
+					version: "0.9.1-yousiki.2",
+					upstreamVersion: "0.9.1",
+					revision: 2,
+				});
+			expect(() => validateForkReleaseVersion("0.9.2-yousiki.1", "0.9.1", [])).toThrow("current package base");
+			expect(() => validateForkReleaseVersion("0.9.1-yousiki.3", "0.9.1", ["v0.9.1-yousiki.1"])).toThrow(
+				"expected 0.9.1-yousiki.2",
+			);
+		});
 	});
 });
 

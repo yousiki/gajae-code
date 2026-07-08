@@ -6,10 +6,16 @@ import { VERSION } from "@gajae-code/utils";
 import {
 	getDisplayChangelogEntries,
 	getInstalledVersionChangelogEntry,
+	getNewEntries,
 	parseChangelogContent,
 } from "../src/utils/changelog";
 
 const tempDirs: string[] = [];
+function versionBase(version: string): string {
+	const match = /^(\d+\.\d+\.\d+)/.exec(version);
+	if (!match) throw new Error(`Invalid version: ${version}`);
+	return match[1];
+}
 
 async function makeTempDir(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-changelog-test-"));
@@ -20,6 +26,8 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
+
+const VERSION_BASE = versionBase(VERSION);
 
 describe("parseChangelogContent", () => {
 	it("returns entries newest first and ignores [Unreleased]", () => {
@@ -51,6 +59,35 @@ describe("parseChangelogContent", () => {
 		expect(entries[1].content).toContain("first entry");
 	});
 
+	it("parses fork prerelease headings as their upstream base version", () => {
+		const fixture = [
+			"# Changelog",
+			"",
+			"## [0.9.1-yousiki.2] - 2026-07-09",
+			"",
+			"### Changed",
+			"",
+			"- second fork release",
+			"",
+			"## [0.9.1-yousiki.1] - 2026-07-08",
+			"",
+			"### Changed",
+			"",
+			"- first fork release",
+			"",
+		].join("\n");
+
+		const entries = parseChangelogContent(fixture);
+
+		expect(entries).toHaveLength(2);
+		expect(entries[0]).toMatchObject({ major: 0, minor: 9, patch: 1, version: "0.9.1-yousiki.2" });
+		expect(getInstalledVersionChangelogEntry(entries, "0.9.1-yousiki.1")?.content).toContain("first fork release");
+		expect(getNewEntries(entries, "0.9.0-yousiki.3")).toHaveLength(2);
+		expect(getNewEntries(entries, "0.9.1")).toHaveLength(2);
+		expect(getNewEntries(entries, "0.9.1-yousiki.1")).toHaveLength(1);
+		expect(getNewEntries(entries, "0.9.1-yousiki.2")).toHaveLength(0);
+	});
+
 	it("returns no entries when no semver heading is present", () => {
 		const fixture = ["# Changelog", "", "## [Unreleased]", "", "- pending", ""].join("\n");
 
@@ -64,7 +101,8 @@ describe("getDisplayChangelogEntries", () => {
 
 		expect(entries.length).toBeGreaterThanOrEqual(1);
 		const top = entries[0];
-		expect(`${top.major}.${top.minor}.${top.patch}`).toBe(VERSION);
+		expect(`${top.major}.${top.minor}.${top.patch}`).toBe(VERSION_BASE);
+		expect(top.version).toBe(VERSION);
 	});
 
 	it("ignores cwd and GJC_PACKAGE_DIR / PI_PACKAGE_DIR overrides for the displayed changelog", async () => {
@@ -94,7 +132,8 @@ describe("getDisplayChangelogEntries", () => {
 
 			expect(entries.length).toBeGreaterThanOrEqual(1);
 			const top = entries[0];
-			expect(`${top.major}.${top.minor}.${top.patch}`).toBe(VERSION);
+			expect(`${top.major}.${top.minor}.${top.patch}`).toBe(VERSION_BASE);
+			expect(top.version).toBe(VERSION);
 			expect(top.major).not.toBe(99);
 			expect(top.content).not.toContain("bogus stale entry from cwd");
 		} finally {
@@ -113,13 +152,11 @@ describe("first-run changelog display", () => {
 		expect(entries.length).toBeGreaterThanOrEqual(2);
 
 		const firstRunEntry = getInstalledVersionChangelogEntry(entries, VERSION);
-		const olderVersion = entries.find(entry => `${entry.major}.${entry.minor}.${entry.patch}` !== VERSION);
+		const olderVersion = entries.find(entry => entry.version !== VERSION);
 		expect(firstRunEntry).toBeDefined();
 		expect(olderVersion).toBeDefined();
 
 		expect(firstRunEntry!.content).toContain(`## [${VERSION}]`);
-		expect(firstRunEntry!.content).not.toContain(
-			`## [${olderVersion!.major}.${olderVersion!.minor}.${olderVersion!.patch}]`,
-		);
+		expect(firstRunEntry!.content).not.toContain(`## [${olderVersion!.version}]`);
 	});
 });
