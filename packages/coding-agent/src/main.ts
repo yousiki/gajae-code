@@ -56,6 +56,7 @@ import { persistTaskTokenLog, resolveTaskTokenLogDir, taskTokenLogFromUsage } fr
 import type { LspStartupServerInfo } from "./tools";
 import { getDisplayChangelogEntries, getInstalledVersionChangelogEntry, getNewEntries } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
+import { isReleaseVersionNewer } from "./utils/release-version";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
@@ -68,7 +69,7 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		const data = (await response.json()) as { version?: string };
 		const latestVersion = data.version;
 
-		if (latestVersion && Bun.semver.order(latestVersion, currentVersion) > 0) {
+		if (latestVersion && isReleaseVersionNewer(latestVersion, currentVersion)) {
 			return latestVersion;
 		}
 

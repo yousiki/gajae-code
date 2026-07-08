@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Startup update notices now use fork release ordering, so `0.9.1-yousiki.1` does not report upstream `0.9.1` as a newer version.
 
 ## [0.9.1-yousiki.1] - 2026-07-08
 
