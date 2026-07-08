@@ -1,5 +1,5 @@
 # @gajae-code/natives-darwin-x64
 
-Darwin x64 optional native addon package for `@gajae-code/natives`.
+Retired Darwin x64 optional native addon package for `@gajae-code/natives`.
 
-This package is installed as an optional dependency of `@gajae-code/natives`; users should import `@gajae-code/natives`, not this package directly.
+This fork no longer publishes Intel macOS (`darwin-x64`) native addon packages; use Apple Silicon macOS, Linux, or Windows builds.

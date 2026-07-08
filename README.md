@@ -93,13 +93,13 @@ Prebuilt standalone release binaries are published only for:
 
 - **Linux** — x64 and arm64
 - **Windows** — x64
-- **macOS** — Apple Silicon (arm64) and Intel (x64)
+- **macOS** — Apple Silicon (arm64)
 
-The npm/Bun package path and build-from-source also remain available on every platform.
+The npm/Bun package path and build-from-source also remain available on supported platforms.
 
-### macOS Intel install
+### macOS support
 
-Standalone release binaries are published for both Apple Silicon (`gjc-darwin-arm64`) and Intel (`gjc-darwin-x64`) macOS. You can also install through the npm/Bun package path or build from source:
+Standalone release binaries are published for Apple Silicon (`gjc-darwin-arm64`) macOS. Intel macOS (`darwin-x64`) release binaries and optional native packages are no longer published by this fork.
 
 ```sh
 bun install -g gajae-code
@@ -310,6 +310,21 @@ Run the CLI from source directly without linking:
 
 ```sh
 bun packages/coding-agent/src/cli.ts --help
+```
+
+### Fork scoped npm publish
+
+To publish this checkout under your own npm scope without rewriting source imports, set `GJC_PUBLISH_SCOPE`. For example, this publishes installable packages such as `@yousiki-gajae-code/gajae-code` while preserving runtime `@gajae-code/*` import specifiers through npm aliases:
+
+```sh
+GJC_PUBLISH_SCOPE=@yousiki-gajae-code bun scripts/ci-release-publish.ts --dry-run
+GJC_PUBLISH_SCOPE=@yousiki-gajae-code bun scripts/ci-release-publish.ts
+```
+
+The final user install command is:
+
+```sh
+bun install -g @yousiki-gajae-code/gajae-code
 ```
 
 Default workflow definitions live in source, not committed `.gjc` copies:

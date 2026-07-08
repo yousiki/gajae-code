@@ -18,7 +18,7 @@ jobs:
   # exact diff via CI_DEV_CHANGED_PATHS instead of re-resolving the base ref.
   affected-plan:
     name: Affected path validation / plan
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       relevant: ${{ steps.relevance.outputs.relevant }}
@@ -54,7 +54,7 @@ jobs:
     name: Affected path validation / native-build
     needs: [affected-plan]
     if: ${{ needs.affected-plan.outputs.relevant == 'true' && needs.affected-plan.outputs.has_native == 'true' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       CI_DEV_CHANGED_PATHS: ${{ needs.affected-plan.outputs.changed_paths }}
@@ -119,7 +119,7 @@ jobs:
     name: Affected path validation / ${{ matrix.key }}
     needs: [affected-plan, affected-native]
     if: ${{ always() && needs.affected-plan.outputs.relevant == 'true' && needs.affected-plan.outputs.has_tasks == 'true' && needs.affected-native.result != 'failure' && needs.affected-native.result != 'cancelled' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -183,7 +183,7 @@ jobs:
     name: Affected path validation
     if: ${{ always() }}
     needs: [affected-plan, affected-native, affected-shards]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Aggregate affected path validation shards
@@ -201,7 +201,7 @@ jobs:
 
   gjc-state-gates-matrix:
     name: gjc-state-gates / ${{ matrix.group }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -236,7 +236,7 @@ jobs:
     name: gjc-state-gates
     if: ${{ always() }}
     needs: [gjc-state-gates-matrix]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Aggregate GJC state gate shards

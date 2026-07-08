@@ -9,7 +9,6 @@ The stable loader package remains `@gajae-code/natives`; platform binaries now p
 - Keep `@gajae-code/natives` as the stable JS/types loader package.
 - Move prebuilt binaries into optional packages named by host triple, for example:
   - `@gajae-code/natives-darwin-arm64`
-  - `@gajae-code/natives-darwin-x64`
   - `@gajae-code/natives-linux-arm64`
   - `@gajae-code/natives-linux-x64`
   - `@gajae-code/natives-win32-x64`

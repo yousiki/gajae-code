@@ -27,7 +27,7 @@ jobs:
    rust-hash:
       timeout-minutes: 15
       if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       outputs:
          hash: ${{ steps.compute.outputs.hash }}
          run-id: ${{ steps.find.outputs.run-id }}
@@ -83,7 +83,7 @@ jobs:
       name: relevance
       timeout-minutes: 10
       if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       outputs:
          relevant: ${{ steps.relevance.outputs.relevant }}
       steps:
@@ -101,7 +101,7 @@ jobs:
    gjc-state-gates:
       name: gjc-state-gates
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       timeout-minutes: 15
       env:
          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
@@ -130,7 +130,7 @@ jobs:
       timeout-minutes: 30
       needs: [relevance]
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
          - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
@@ -157,7 +157,7 @@ jobs:
       needs: [rust-hash, relevance]
       if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
          (startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.run-id == '') }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       strategy:
          fail-fast: false
          matrix:
@@ -243,9 +243,8 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { os: ubuntu-22.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
-               - { os: macos-14, platform: darwin, arch: arm64 }
-               - { os: macos-15-intel, platform: darwin, arch: x64 }
+               - { os: ubuntu-26.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+               - { os: macos-26, platform: darwin, arch: arm64 }
                - { os: windows-latest, platform: win32, arch: x64, variant: baseline }
       runs-on: ${{ matrix.os }}
       steps:
@@ -260,7 +259,7 @@ jobs:
               save_cache: ${{ github.event_name == 'push' && ((github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') || startsWith(github.ref, 'refs/tags/v')) }}
 
    test:
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       needs: [native_linux, rust-hash, relevance]
       if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
          !startsWith(github.ref, 'refs/tags/v') && needs.native_linux.result != 'failure' }}
@@ -320,7 +319,7 @@ jobs:
       timeout-minutes: 45
       needs: [relevance]
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -368,32 +367,25 @@ jobs:
          matrix:
             include:
                - {
-                    os: ubuntu-22.04,
+                    os: ubuntu-26.04,
                     platform: linux,
                     arch: x64,
                     target_id: linux-x64,
                     binary_path: packages/coding-agent/binaries/gjc-linux-x64,
                  }
                - {
-                    os: ubuntu-24.04-arm,
+                    os: ubuntu-26.04-arm,
                     platform: linux,
                     arch: arm64,
                     target_id: linux-arm64,
                     binary_path: packages/coding-agent/binaries/gjc-linux-arm64,
                  }
                - {
-                    os: macos-14,
+                    os: macos-26,
                     platform: darwin,
                     arch: arm64,
                     target_id: darwin-arm64,
                     binary_path: packages/coding-agent/binaries/gjc-darwin-arm64,
-                 }
-               - {
-                    os: macos-15-intel,
-                    platform: darwin,
-                    arch: x64,
-                    target_id: darwin-x64,
-                    binary_path: packages/coding-agent/binaries/gjc-darwin-x64,
                  }
                - {
                     os: windows-latest,
@@ -458,7 +450,7 @@ jobs:
          startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
          needs.release_binary.result == 'success' }}
       needs: [release_binary]
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       permissions:
          contents: write
       steps:
@@ -482,7 +474,7 @@ jobs:
       if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
          needs['release-github'].result == 'success' }}
       needs: [release-github]
-      runs-on: macos-14
+      runs-on: macos-26
       permissions:
          contents: read
       steps:
@@ -505,7 +497,7 @@ jobs:
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
       needs: [release_binary, release_github_verify, rust-hash]
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-26.04
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
          - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
@@ -535,4 +527,5 @@ jobs:
            env:
               NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+              GJC_PUBLISH_SCOPE: "@yousiki-gajae-code"
            run: bun run ci:release:publish

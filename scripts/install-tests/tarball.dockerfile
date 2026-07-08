@@ -68,7 +68,7 @@ RUN cat > /repo/scripts/publish-local.sh <<'SCRIPT'
 set -e
 
 REGISTRY="http://localhost:4873"
-PACKAGES=(utils ai natives-darwin-arm64 natives-darwin-x64 natives-linux-arm64 natives-linux-x64 natives-win32-x64 natives tui stats agent coding-agent gajae-code)
+PACKAGES=(utils ai natives-darwin-arm64 natives-linux-arm64 natives-linux-x64 natives-win32-x64 natives tui stats agent coding-agent gajae-code)
 
 # Build version maps from local workspaces and the root catalog.
 jq '.workspaces.catalog // {}' /repo/package.json > /tmp/catalog-versions.json
@@ -85,7 +85,6 @@ stage_native_platform_artifacts() {
     local prefix=""
     case "$pkg" in
         natives-darwin-arm64) prefix="pi_natives.darwin-arm64" ;;
-        natives-darwin-x64) prefix="pi_natives.darwin-x64" ;;
         natives-linux-arm64) prefix="pi_natives.linux-arm64" ;;
         natives-linux-x64) prefix="pi_natives.linux-x64" ;;
         natives-win32-x64) prefix="pi_natives.win32-x64" ;;

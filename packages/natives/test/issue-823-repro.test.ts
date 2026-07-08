@@ -175,5 +175,6 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 
 		expect(dirs).toEqual(["/repo/node_modules/@gajae-code/natives-darwin-arm64/native"]);
 		expect(getOptionalPackageNames("freebsd-x64")).toEqual([]);
+		expect(getOptionalPackageNames("darwin-x64")).toEqual([]);
 	});
 });
