@@ -45,9 +45,7 @@ Current capability groups in the generated API include:
 - Platform tag is `${process.platform}-${process.arch}`.
 - Supported tags are currently:
   - `linux-x64`
-  - `linux-arm64`
   - `darwin-arm64`
-  - `win32-x64`
 - x64 can use CPU variants:
   - `modern` (AVX2-capable)
   - `baseline` (fallback)

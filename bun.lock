@@ -109,9 +109,7 @@
       },
       "optionalDependencies": {
         "@gajae-code/natives-darwin-arm64": "workspace:*",
-        "@gajae-code/natives-linux-arm64": "workspace:*",
         "@gajae-code/natives-linux-x64": "workspace:*",
-        "@gajae-code/natives-win32-x64": "workspace:*",
       },
     },
     "packages/natives-darwin-arm64": {
@@ -252,9 +250,7 @@
     "@gajae-code/coding-agent": "0.9.1",
     "@gajae-code/natives": "0.9.1",
     "@gajae-code/natives-darwin-arm64": "0.9.1",
-    "@gajae-code/natives-linux-arm64": "0.9.1",
     "@gajae-code/natives-linux-x64": "0.9.1",
-    "@gajae-code/natives-win32-x64": "0.9.1",
     "@gajae-code/stats": "0.9.1",
     "@gajae-code/tui": "0.9.1",
     "@gajae-code/utils": "0.9.1",

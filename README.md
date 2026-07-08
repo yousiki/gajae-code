@@ -91,15 +91,14 @@ The installer writes `gjc.js` plus a minimal `index.js` into inshellisense's def
 
 Prebuilt standalone release binaries are published only for:
 
-- **Linux** — x64 and arm64
-- **Windows** — x64
-- **macOS** — Apple Silicon (arm64)
+- **Linux** — x64
+- **macOS 26** — Apple Silicon (arm64)
 
-The npm/Bun package path and build-from-source also remain available on supported platforms.
+The npm/Bun package path and build-from-source are maintained for those two platforms only.
 
 ### macOS support
 
-Standalone release binaries are published for Apple Silicon (`gjc-darwin-arm64`) macOS. Intel macOS (`darwin-x64`) release binaries and optional native packages are no longer published by this fork.
+Standalone release binaries are published for Apple Silicon macOS 26 (`gjc-darwin-arm64`). Intel macOS (`darwin-x64`) release binaries and optional native packages are no longer published by this fork.
 
 ```sh
 bun install -g gajae-code
@@ -107,44 +106,9 @@ bun install -g gajae-code
 curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.sh | sh -s -- --source
 ```
 
-### Windows (native install)
+### Unsupported release platforms
 
-On a clean Windows 11 machine, install Bun first, then install `gjc` with Bun's
-global installer:
-
-```powershell
-# 1. Install Bun
-powershell -c "irm bun.sh/install.ps1|iex"
-
-# 2. Restart the terminal so PATH and the Bun runtime refresh, then confirm Bun
-bun --version
-
-# 3. Install and verify gjc
-bun install -g gajae-code
-gjc --version
-gjc --smoke-test
-```
-
-`bun install -g` places the `gjc` launcher in `%USERPROFILE%\.bun\bin`. That
-directory must be on `PATH` for `gjc` to resolve as a command. Bun's installer
-adds it automatically, but the change only applies to terminals started after
-installation — restart PowerShell (or sign out/in) if `gjc` is "not recognized".
-
-Troubleshooting:
-
-- **`gjc` reports an old Bun runtime.** Re-run the Bun installer above, restart
-  the terminal, and confirm `bun --version` matches what `gjc --version`
-  expects. If an older Bun still wins, make sure `%USERPROFILE%\.bun\bin` is
-  first on `PATH` and remove any stale Bun installs shadowing it.
-- **`gjc.exe` exists but `gjc` is "not recognized".** The launcher is installed
-  but not on `PATH`. Confirm `%USERPROFILE%\.bun\bin` is listed in
-  `echo $env:Path`, then restart the terminal.
-- **`gjc --tmux` starts without a tmux-backed session.** Native Windows needs a
-  tmux-compatible executable on `PATH`. For GJC-managed session/team guarantees,
-  use WSL with real tmux, or another provider that round-trips tmux user options
-  such as `@gjc-profile`. Native psmux can provide `tmux`/`pmux`/`psmux`
-  commands, but that path is not fully supported for GJC ownership tags and team
-  guarantees yet; see `docs/environment-variables.md#interactive---tmux-startup-and-scrollmouse-profile`.
+This fork no longer publishes Linux arm64 (`linux-arm64`) or Windows x64 (`win32-x64`) release binaries/native packages.
 
 ## Quick start
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Published optional native packages are now limited to `darwin-arm64` and `linux-x64`; retired `linux-arm64` and `win32-x64` package manifests are private.
+
 ## [0.9.1] - 2026-07-08
 
 ### Changed

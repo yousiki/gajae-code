@@ -1,7 +1,8 @@
 {
 	"name": "@gajae-code/natives-linux-arm64",
 	"version": "0.9.1",
-	"description": "Linux arm64 native addon for @gajae-code/natives",
+	"description": "Retired Linux arm64 native addon package for @gajae-code/natives",
+	"private": true,
 	"type": "module",
 	"homepage": "https://gajae-code.com",
 	"author": "Yeachan-Heo",

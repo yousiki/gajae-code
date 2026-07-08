@@ -49,9 +49,7 @@ At module initialization, `native/index.js` computes:
 `SUPPORTED_PLATFORMS` is fixed to:
 
 - `linux-x64`
-- `linux-arm64`
 - `darwin-arm64`
-- `win32-x64`
 
 Unsupported platforms are not rejected before probing. The loader first tries the computed candidate paths. If all fail and `platformTag` is unsupported, it throws an unsupported-platform error listing supported tags.
 

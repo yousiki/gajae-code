@@ -7,11 +7,9 @@ The stable loader package remains `@gajae-code/natives`; platform binaries now p
 ## Target package topology
 
 - Keep `@gajae-code/natives` as the stable JS/types loader package.
-- Move prebuilt binaries into optional packages named by host triple, for example:
+- Move prebuilt binaries into optional packages named by host triple:
   - `@gajae-code/natives-darwin-arm64`
-  - `@gajae-code/natives-linux-arm64`
   - `@gajae-code/natives-linux-x64`
-  - `@gajae-code/natives-win32-x64`
 - Add those packages as `optionalDependencies` of `@gajae-code/natives` with the lockstep release version.
 - Publish each platform package with exactly its relevant `pi_natives.<platform>-<arch>*.node` file(s), `README.md`, and `package.json` using `os` / `cpu` fields so non-host package-manager failures remain optional.
 - Update `native/loader-state.js` to search the host optional package before falling back to the legacy bundled `native/` directory and compiled-binary embedded addons.

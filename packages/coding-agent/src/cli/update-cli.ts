@@ -265,40 +265,16 @@ export function compareVersionsForTest(a: string, b: string): number {
 }
 
 /**
- * Get the appropriate binary name for this platform.
+ * Get the release binary name for supported binary targets.
  */
 function getBinaryName(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
-	let os: string;
-	switch (platform) {
-		case "linux":
-			os = "linux";
-			break;
-		case "darwin":
-			os = "darwin";
-			break;
-		case "win32":
-			os = "windows";
-			break;
-		default:
-			throw new Error(formatUnsupportedTargetMessage(`Unsupported platform: ${platform}`));
+	if (platform === "linux" && arch === "x64") {
+		return `${APP_NAME}-linux-x64`;
 	}
-
-	let archName: string;
-	switch (arch) {
-		case "x64":
-			archName = "x64";
-			break;
-		case "arm64":
-			archName = "arm64";
-			break;
-		default:
-			throw new Error(formatUnsupportedTargetMessage(`Unsupported architecture: ${arch}`));
+	if (platform === "darwin" && arch === "arm64") {
+		return `${APP_NAME}-darwin-arm64`;
 	}
-
-	if (os === "windows") {
-		return `${APP_NAME}-${os}-${archName}.exe`;
-	}
-	return `${APP_NAME}-${os}-${archName}`;
+	throw new Error(formatUnsupportedBinaryTargetMessage(`Unsupported release binary target: ${platform}-${arch}`));
 }
 
 /**
@@ -367,10 +343,19 @@ function printSuccessfulVerification(expectedVersion: string): void {
 }
 
 function formatBinaryInstallInstruction(platform: NodeJS.Platform = process.platform): string {
-	if (platform === "win32") {
-		return `For a supported binary install, reinstall with PowerShell: irm https://raw.githubusercontent.com/${RELEASE_REPO}/main/scripts/install.ps1 | iex`;
+	if (platform === "linux" || platform === "darwin") {
+		return `For a supported binary install, reinstall with: curl -fsSL https://raw.githubusercontent.com/${RELEASE_REPO}/main/scripts/install.sh | sh -s -- --binary`;
 	}
-	return `For a supported binary install, reinstall with: curl -fsSL https://raw.githubusercontent.com/${RELEASE_REPO}/main/scripts/install.sh | sh -s -- --binary`;
+	return "Prebuilt binary releases are published only for macOS arm64 and Linux x64; use a supported host or build from source.";
+}
+
+function formatUnsupportedBinaryTargetMessage(reason: string): string {
+	return [
+		`${reason}.`,
+		`If ${APP_NAME} was installed with Bun, run: bun install -g ${PACKAGE}@latest`,
+		`If ${APP_NAME} was installed with npm, pnpm, or another package manager, update it with that same manager.`,
+		"Prebuilt binary releases are published only for macOS arm64 and Linux x64; use a supported host or build from source.",
+	].join("\n");
 }
 
 function formatManualUpdateInstructions(platform: NodeJS.Platform = process.platform): string {

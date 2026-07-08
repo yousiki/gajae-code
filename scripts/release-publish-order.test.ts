@@ -110,10 +110,9 @@ describe("unscoped gajae-code package publication", () => {
 		const nativesIndex = publishDirs.indexOf("packages/natives");
 		const platformDirs = [
 			"packages/natives-darwin-arm64",
-			"packages/natives-linux-arm64",
 			"packages/natives-linux-x64",
-			"packages/natives-win32-x64",
 		];
+
 
 		expect(nativesIndex).toBeGreaterThan(-1);
 		for (const dir of platformDirs) {
@@ -145,18 +144,15 @@ describe("unscoped gajae-code package publication", () => {
 		expect(manifest.files?.some((entry) => entry === "native" || entry.endsWith(".node"))).toBe(false);
 		expect(manifest.optionalDependencies).toEqual({
 			"@gajae-code/natives-darwin-arm64": "workspace:*",
-			"@gajae-code/natives-linux-arm64": "workspace:*",
 			"@gajae-code/natives-linux-x64": "workspace:*",
-			"@gajae-code/natives-win32-x64": "workspace:*",
 		});
+
 	});
 
-	test("native platform package manifests constrain host os and cpu", async () => {
+	test("published native platform package manifests constrain host os and cpu", async () => {
 		const cases: Array<[string, string, string]> = [
 			["packages/natives-darwin-arm64", "darwin", "arm64"],
-			["packages/natives-linux-arm64", "linux", "arm64"],
 			["packages/natives-linux-x64", "linux", "x64"],
-			["packages/natives-win32-x64", "win32", "x64"],
 		];
 
 		for (const [dir, os, cpu] of cases) {
@@ -166,6 +162,14 @@ describe("unscoped gajae-code package publication", () => {
 			expect(manifest.files).toEqual(["native", "README.md"]);
 		}
 	});
+
+	test("retired native platform packages are private", async () => {
+		for (const dir of ["packages/natives-darwin-x64", "packages/natives-linux-arm64", "packages/natives-win32-x64"]) {
+			const manifest = await readManifest(dir);
+			expect(manifest.private).toBe(true);
+		}
+	});
+
 
 	test("release publish dry-run does not rewrite source manifests", async () => {
 		const manifestPaths = [
@@ -262,31 +266,34 @@ describe("release bump set equals publish set", () => {
 });
 
 describe("native release binary coverage", () => {
-	test("release workflow omits Intel macOS release artifacts", async () => {
+	test("release workflow only ships macOS arm64 and Linux x64 artifacts", async () => {
 		const workflow = await Bun.file(path.join(repoRoot, ".github/workflows/ci.yml")).text();
 
-		expect(workflow).not.toContain("{ os: macos-13, platform: darwin, arch: x64 }");
-		expect(workflow).not.toContain("{ os: macos-15-intel, platform: darwin, arch: x64 }");
-		expect(workflow).not.toContain("target_id: darwin-x64");
-		expect(workflow).not.toContain("binary_path: packages/coding-agent/binaries/gjc-darwin-x64");
 		expect(workflow).toContain("{ os: macos-26, platform: darwin, arch: arm64 }");
-		expect(workflow).toContain(
-			"{ os: ubuntu-26.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }",
-		);
+		expect(workflow).toContain("target_id: darwin-arm64");
 		expect(workflow).toContain("os: ubuntu-26.04,");
-		expect(workflow).toContain("os: ubuntu-26.04-arm,");
+		expect(workflow).toContain("target_id: linux-x64");
+		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
+
+		expect(workflow).not.toContain("target_id: darwin-x64");
+		expect(workflow).not.toContain("target_id: linux-arm64");
+		expect(workflow).not.toContain("target_id: win32-x64");
+		expect(workflow).not.toContain("binary_path: packages/coding-agent/binaries/gjc-darwin-x64");
+		expect(workflow).not.toContain("binary_path: packages/coding-agent/binaries/gjc-linux-arm64");
+		expect(workflow).not.toContain("binary_path: packages/coding-agent/binaries/gjc-windows-x64.exe");
 		expect(workflow).not.toContain("ubuntu-22.04");
 		expect(workflow).not.toContain("ubuntu-24.04-arm");
-		expect(workflow).toContain("target_id: darwin-arm64");
-		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
+		expect(workflow).not.toContain("ubuntu-26.04-arm");
+		expect(workflow).not.toContain("windows-latest");
 	});
+
 
 	test("linux native platform packages declare their glibc requirement", async () => {
 		// The linux native addons are built against *-unknown-linux-gnu targets
 		// only (see the ci.yml build matrix), so the platform packages must set
 		// "libc" to keep npm/bun from installing a glibc-linked .node on musl
 		// systems (e.g. Alpine), where dlopen fails with raw relocation errors.
-		for (const dir of ["packages/natives-linux-x64", "packages/natives-linux-arm64"]) {
+		for (const dir of ["packages/natives-linux-x64"]) {
 			const manifest = await readManifest(dir);
 			expect(manifest.libc).toEqual(["glibc"]);
 		}
