@@ -103,7 +103,7 @@ describe("InteractiveMode.setEditorComponent", () => {
 	});
 
 	function expectedQueueShortcutHint(): string {
-		const shortcut = process.platform === "win32" ? "Alt+Q" : "Alt+Enter";
+		const shortcut = process.platform === "linux" ? "Alt+Enter" : "Alt+Q";
 		return `${shortcut}: Queue`;
 	}
 

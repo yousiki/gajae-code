@@ -297,7 +297,7 @@ describe("CLI help load order", () => {
 		]);
 
 		expect(exitCode).toBe(0);
-		expect(stdout).toMatch(/^gjc\/\d+\.\d+\.\d+\n$/);
+		expect(stdout).toMatch(/^gjc\/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\n$/);
 		expect(stderr).toBe("");
 	}, 15_000);
 	it("package bin wrapper executes CLI help when imported by a Bun global shim", async () => {

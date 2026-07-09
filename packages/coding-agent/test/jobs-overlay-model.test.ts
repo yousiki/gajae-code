@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { JobsOverlayComponent, type JobsOverlayController } from "../src/modes/components/jobs-overlay";
 import {
 	buildConfirmItems,
@@ -8,6 +8,7 @@ import {
 	parseJobRef,
 } from "../src/modes/components/jobs-overlay-model";
 import type { JobsSnapshot } from "../src/modes/jobs-observer";
+import { initTheme } from "../src/modes/theme/theme";
 
 function snapshot(over: Partial<JobsSnapshot> = {}): JobsSnapshot {
 	return {
@@ -58,6 +59,9 @@ function makeOverlayController(over: Partial<JobsSnapshot> = {}) {
 	};
 }
 
+beforeAll(() => {
+	initTheme();
+});
 describe("jobs overlay model", () => {
 	test("AC8 list is grouped Monitors-then-Crons preserving newest-first order", () => {
 		const items = buildJobsListItems(
