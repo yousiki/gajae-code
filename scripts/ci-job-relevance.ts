@@ -2,11 +2,11 @@
 /**
  * Conservative changed-path relevance gate for expensive CI jobs.
  *
- * Emits `relevant=true|false` to $GITHUB_OUTPUT. `relevant=false` is only
- * produced when the run is a pull_request with a known base SHA and EVERY
- * changed path is provably irrelevant (markdown, docs/, .gjc/). Any other
- * event, missing data, or error fails open to `relevant=true` so validation
- * is never weakened by ambiguity.
+ * Emits `relevant=true|false` to $GITHUB_OUTPUT. `relevant=false` is produced
+ * for pull_request runs with a known base SHA, and push runs with a known
+ * before SHA, when EVERY changed path is provably irrelevant (markdown, docs/,
+ * .gjc/). Any other event, missing data, or error fails open to
+ * `relevant=true` so validation is never weakened by ambiguity.
  */
 
 import { $ } from "bun";
@@ -15,33 +15,49 @@ import * as path from "node:path";
 
 const repoRoot = path.join(import.meta.dir, "..");
 
-interface Decision {
+export interface Decision {
 	relevant: boolean;
 	reason: string;
 }
 
-function isProvablyIrrelevant(changedPath: string): boolean {
+export function isProvablyIrrelevant(changedPath: string): boolean {
 	return changedPath.endsWith(".md") || changedPath.startsWith("docs/") || changedPath.startsWith(".gjc/");
 }
 
-async function changedFiles(baseSha: string): Promise<string[]> {
-	await $`git fetch --no-tags --depth=1 origin ${baseSha}`.cwd(repoRoot).quiet().nothrow();
-	const result = await $`git diff --name-only ${baseSha} HEAD`.cwd(repoRoot).quiet();
-	return result.stdout.toString().split("\n").filter(Boolean);
+export interface RelevanceEnv {
+	GITHUB_EVENT_NAME?: string;
+	GITHUB_BASE_SHA?: string;
+	GITHUB_EVENT_BEFORE?: string;
+	GITHUB_OUTPUT?: string;
 }
 
-async function decide(): Promise<Decision> {
-	const eventName = process.env.GITHUB_EVENT_NAME ?? "";
-	if (eventName !== "pull_request") {
-		return { relevant: true, reason: `event '${eventName || "unknown"}' is not pull_request; running everything` };
+type ChangedFilesLoader = (baseSha: string) => Promise<string[]>;
+
+const zeroShaRe = /^0+$/;
+
+function baseShaForEvent(env: RelevanceEnv): Decision & { baseSha?: string } {
+	const eventName = env.GITHUB_EVENT_NAME ?? "";
+
+	if (eventName === "pull_request") {
+		const baseSha = env.GITHUB_BASE_SHA;
+		if (!baseSha) {
+			return { relevant: true, reason: "GITHUB_BASE_SHA missing; running everything" };
+		}
+		return { relevant: true, reason: "pull_request base SHA found", baseSha };
 	}
 
-	const baseSha = process.env.GITHUB_BASE_SHA;
-	if (!baseSha) {
-		return { relevant: true, reason: "GITHUB_BASE_SHA missing; running everything" };
+	if (eventName === "push") {
+		const beforeSha = env.GITHUB_EVENT_BEFORE;
+		if (!beforeSha || zeroShaRe.test(beforeSha)) {
+			return { relevant: true, reason: "GITHUB_EVENT_BEFORE missing or empty; running everything" };
+		}
+		return { relevant: true, reason: "push before SHA found", baseSha: beforeSha };
 	}
 
-	const files = await changedFiles(baseSha);
+	return { relevant: true, reason: `event '${eventName || "unknown"}' is not pull_request or push; running everything` };
+}
+
+export function decideChangedFilesRelevance(files: readonly string[]): Decision {
 	if (files.length === 0) {
 		return { relevant: true, reason: "empty diff against base; running everything" };
 	}
@@ -57,16 +73,41 @@ async function decide(): Promise<Decision> {
 	};
 }
 
-let decision: Decision;
-try {
-	decision = await decide();
-} catch (error) {
-	const message = error instanceof Error ? error.message : String(error);
-	decision = { relevant: true, reason: `relevance check failed (${message}); running everything` };
+async function changedFiles(baseSha: string): Promise<string[]> {
+	await $`git fetch --no-tags --depth=1 origin ${baseSha}`.cwd(repoRoot).quiet().nothrow();
+	const result = await $`git diff --name-only ${baseSha} HEAD`.cwd(repoRoot).quiet();
+	return result.stdout.toString().split("\n").filter(Boolean);
 }
 
-console.log(`ci-job-relevance: relevant=${decision.relevant} (${decision.reason})`);
+export async function decideRelevance(
+	env: RelevanceEnv = process.env,
+	loadChangedFiles: ChangedFilesLoader = changedFiles,
+): Promise<Decision> {
+	const base = baseShaForEvent(env);
+	if (!base.baseSha) {
+		return { relevant: base.relevant, reason: base.reason };
+	}
 
-if (process.env.GITHUB_OUTPUT) {
-	await fs.appendFile(process.env.GITHUB_OUTPUT, `relevant=${decision.relevant}\n`);
+	const files = await loadChangedFiles(base.baseSha);
+	return decideChangedFilesRelevance(files);
+}
+
+async function main(): Promise<void> {
+	let decision: Decision;
+	try {
+		decision = await decideRelevance();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		decision = { relevant: true, reason: `relevance check failed (${message}); running everything` };
+	}
+
+	console.log(`ci-job-relevance: relevant=${decision.relevant} (${decision.reason})`);
+
+	if (process.env.GITHUB_OUTPUT) {
+		await fs.appendFile(process.env.GITHUB_OUTPUT, `relevant=${decision.relevant}\n`);
+	}
+}
+
+if (import.meta.main) {
+	await main();
 }
