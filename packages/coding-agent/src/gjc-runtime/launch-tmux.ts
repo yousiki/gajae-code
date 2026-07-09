@@ -158,11 +158,43 @@ export interface GjcTmuxProfileContext {
 	version?: string | null;
 }
 
+function tmuxExitMarkerPath(sessionStateFile: string): string {
+	return path.join(path.dirname(sessionStateFile), "tmux-exit.json");
+}
+
+function buildPosixTmuxExitMarkerPrefix(markerPath: string): string {
+	const markerDir = path.dirname(markerPath);
+	return [
+		`__gjc_tmux_exit_marker=${shellQuote(markerPath)}`,
+		"__gjc_tmux_write_exit_marker() { __gjc_tmux_status=$?",
+		"__gjc_tmux_ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)",
+		`mkdir -p ${shellQuote(markerDir)} 2>/dev/null || true`,
+		'printf \'{"schema_version":1,"source":"tmux_inner_shell","ended_at":"%s","exit_code":%s}\\n\' "$__gjc_tmux_ended_at" "$__gjc_tmux_status" > "$__gjc_tmux_exit_marker" 2>/dev/null || true',
+		"}",
+		"trap __gjc_tmux_write_exit_marker EXIT",
+	].join("; ");
+}
+
+function buildPowerShellTmuxExitMarkerFinally(markerPath: string): string {
+	const markerDir = path.win32.dirname(markerPath);
+	return [
+		"} finally {",
+		"\ttry {",
+		`\t\tNew-Item -ItemType Directory -Force -Path ${powershellQuote(markerDir)} -ErrorAction Stop | Out-Null`,
+		"\t\t$__gjcTmuxExitMarker = @{ schema_version = 1; source = 'tmux_inner_shell'; ended_at = (Get-Date).ToUniversalTime().ToString('o'); exit_code = $__gjcTmuxExitCode } | ConvertTo-Json -Compress",
+		`\t\tSet-Content -LiteralPath ${powershellQuote(markerPath)} -Value $__gjcTmuxExitMarker -Encoding UTF8 -ErrorAction Stop`,
+		"\t} catch {",
+		"\t}",
+		"}",
+	].join("\n");
+}
+
 interface CommandResolutionContext {
 	cwd: string;
 	argv: string[];
 	execPath: string;
 	extraEnv?: Record<string, string>;
+	tmuxExitMarkerPath?: string;
 	platform?: NodeJS.Platform;
 }
 
@@ -286,7 +318,17 @@ function buildWindowsPowerShellInnerCommand(context: CommandResolutionContext, r
 	const innerArgs = stripRootTmuxFlag(rawArgs).map(powershellQuote).join(" ");
 	const invocation = `& ${resolvedCommand} ${innerArgs}`;
 	const exitLine = "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 }";
-	const script = [...envLines, invocation, exitLine].join("\n");
+	const script = context.tmuxExitMarkerPath
+		? [
+				...envLines,
+				"$__gjcTmuxExitCode = 1",
+				"try {",
+				`\t${invocation}`,
+				"\tif ($null -ne $LASTEXITCODE) { $__gjcTmuxExitCode = $LASTEXITCODE } else { $__gjcTmuxExitCode = 1 }",
+				buildPowerShellTmuxExitMarkerFinally(context.tmuxExitMarkerPath),
+				"exit $__gjcTmuxExitCode",
+			].join("\n")
+		: [...envLines, invocation, exitLine].join("\n");
 	// Encode the script as UTF-16LE base64 for pwsh -EncodedCommand. Do NOT
 	// prepend a UTF-16LE BOM (0xFF 0xFE): the BOM survives the decode and is
 	// inserted as a literal U+FEFF character in front of the first script
@@ -366,7 +408,9 @@ function buildInnerCommand(context: CommandResolutionContext, rawArgs: string[])
 	if (isWindowsPlatform(context.platform)) return buildWindowsPowerShellInnerCommand(context, rawArgs);
 	const command = resolveCurrentGjcCommand(context);
 	const quoted = [...command, ...stripRootTmuxFlag(rawArgs)].map(shellQuote).join(" ");
-	return `exec env ${GJC_TMUX_LAUNCHED_ENV}=1${buildEnvAssignments(context.extraEnv)} ${quoted}`;
+	const invocation = `env ${GJC_TMUX_LAUNCHED_ENV}=1${buildEnvAssignments(context.extraEnv)} ${quoted}`;
+	if (!context.tmuxExitMarkerPath) return `exec ${invocation}`;
+	return `${buildPosixTmuxExitMarkerPrefix(context.tmuxExitMarkerPath)}; ${invocation}; exit $?`;
 }
 
 function visibleWidth(value: string): number {
@@ -404,6 +448,9 @@ function truncateVisibleTail(value: string, maxWidth: number): string {
 const GJC_TMUX_WINDOW_BRANCH_SEPARATOR = "-";
 const GJC_TMUX_WINDOW_TITLE_PREFIX = "GJC-";
 const GJC_TMUX_TERMINAL_TITLE_PREFIX = "GJC: ";
+const GJC_TMUX_ROOT_TERMINAL_TITLE_OPTION = "@gjc-root-terminal-title";
+const GJC_TMUX_ROOT_TERMINAL_TITLE_SESSION_OPTION = "@gjc-root-terminal-title-session";
+const GJC_TMUX_DYNAMIC_SESSION_TITLE = "GJC: #{session_name}";
 
 function sanitizeTmuxWindowTitleSegment(value: string): string {
 	return value.replace(/:+/g, "-");
@@ -445,17 +492,31 @@ function sanitizeGjcTmuxRootTerminalTitle(title: string): string {
 	return title.replace(TERMINAL_TITLE_CONTROL_CHARS, "").trim() || "GJC";
 }
 
-function escapeTmuxFormatLiteral(value: string): string {
-	return value.replace(/#/g, "##");
+function buildGjcTmuxRootTerminalTitleFormat(sessionName: string): string {
+	if (!sessionName.startsWith(GJC_TMUX_SESSION_PREFIX)) return GJC_TMUX_DYNAMIC_SESSION_TITLE;
+	return `#{?#{==:#{${GJC_TMUX_ROOT_TERMINAL_TITLE_SESSION_OPTION}},#{session_name}},#{${GJC_TMUX_ROOT_TERMINAL_TITLE_OPTION}},${GJC_TMUX_DYNAMIC_SESSION_TITLE}}`;
 }
 
-function buildGjcTmuxRootTerminalTitleCommands(target: string, title: string): GjcTmuxProfileCommand[] {
-	const sanitized = escapeTmuxFormatLiteral(sanitizeGjcTmuxRootTerminalTitle(title));
+function buildGjcTmuxRootTerminalTitleCommands(
+	target: string,
+	sessionName: string,
+	title: string,
+): GjcTmuxProfileCommand[] {
+	const sanitized = sanitizeGjcTmuxRootTerminalTitle(title);
+	const format = buildGjcTmuxRootTerminalTitleFormat(sessionName);
 	return [
+		{
+			description: "remember tmux client terminal title fallback",
+			args: ["set-option", "-t", target, GJC_TMUX_ROOT_TERMINAL_TITLE_OPTION, sanitized],
+		},
+		{
+			description: "remember tmux client terminal title session",
+			args: ["set-option", "-t", target, GJC_TMUX_ROOT_TERMINAL_TITLE_SESSION_OPTION, sessionName],
+		},
 		{ description: "enable tmux client terminal title", args: ["set-option", "-t", target, "set-titles", "on"] },
 		{
-			description: "set tmux client terminal title",
-			args: ["set-option", "-t", target, "set-titles-string", sanitized],
+			description: "set dynamic tmux client terminal title",
+			args: ["set-option", "-t", target, "set-titles-string", format],
 		},
 	];
 }
@@ -468,10 +529,8 @@ function applyGjcTmuxRootTerminalTitleProfile(context: {
 	options: TmuxSpawnOptions;
 }): void {
 	if (!context.title) return;
-	for (const command of buildGjcTmuxRootTerminalTitleCommands(
-		buildGjcTmuxExactOptionTarget(context.target, { env: context.options.env }),
-		context.title,
-	)) {
+	const optionTarget = buildGjcTmuxExactOptionTarget(context.target, { env: context.options.env });
+	for (const command of buildGjcTmuxRootTerminalTitleCommands(optionTarget, context.target, context.title)) {
 		context.spawnSync(context.tmuxCommand, command.args, context.options);
 	}
 }
@@ -695,6 +754,7 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 				// session, which would split/send workers into the wrong session.
 				[GJC_TMUX_ACTIVE_SESSION_ENV]: sessionName,
 			},
+			tmuxExitMarkerPath: tmuxExitMarkerPath(sessionStateFile),
 			platform,
 		},
 		context.rawArgs,

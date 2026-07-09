@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-09
+### Added
+
+- Added runtime credential selectors so callers can pin stored multi-account credentials by id, email, account id, or project id instead of using automatic rotation/ranking.
+
+### Fixed
+
+- Refreshed the default Gemini CLI impersonation version to 0.50.0 so the spoofed User-Agent freshness gate passes for the 0.9.2 release.
+
 ## [0.9.1] - 2026-07-08
 
 ### Fixed

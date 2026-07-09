@@ -169,13 +169,50 @@ describe("default GJC tmux launch", () => {
 			"-t",
 			expect.stringMatching(/^=gajae_code_.*:$/),
 			"set-titles-string",
-			"GJC: repo-feature/demo",
+			"#{?#{==:#{@gjc-root-terminal-title-session},#{session_name}},#{@gjc-root-terminal-title},GJC: #{session_name}}",
 		]);
+		expect(
+			calls.some(call => call.args[3] === "@gjc-root-terminal-title" && call.args[4] === "GJC: repo-feature/demo"),
+		).toBe(true);
+		expect(
+			calls.some(
+				call => call.args[3] === "@gjc-root-terminal-title-session" && /^gajae_code_/.test(call.args[4] ?? ""),
+			),
+		).toBe(true);
 		expect(calls.some(call => call.args[3] === "set-titles" && call.args[4] === "on")).toBe(true);
 		expect(writeSpy).not.toHaveBeenCalled();
 	});
+	it("uses the live tmux session name for already renamed managed sessions", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
 
-	it("escapes tmux format markers in client terminal titles", () => {
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ messages: ["hello world"], tmux: true, continue: true }),
+			rawArgs: ["--tmux", "--continue", "hello world"],
+			cwd: "/repo",
+			env: {},
+			argv: ["bun", "packages/coding-agent/src/cli.ts"],
+			execPath: "/bin/bun",
+			platform: "darwin",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			existingBranchSessionName: "office-renamed",
+			currentBranch: "feature/demo",
+			spawnSync: (command, spawnArgs) => {
+				calls.push({ command, args: spawnArgs });
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		expect(calls.find(call => call.args[3] === "set-titles-string")?.args.at(-1)).toBe("GJC: #{session_name}");
+		expect(calls.find(call => call.args[0] === "attach-session")?.args).toEqual([
+			"attach-session",
+			"-t",
+			"=office-renamed",
+		]);
+	});
+
+	it("stores literal fallback titles outside the tmux title format", () => {
 		const calls: Array<{ command: string; args: string[] }> = [];
 		const handled = launchDefaultTmuxIfNeeded({
 			parsed: args({ messages: ["hello world"], tmux: true }),
@@ -196,7 +233,14 @@ describe("default GJC tmux launch", () => {
 		});
 
 		expect(handled).toBe(true);
-		expect(calls.find(call => call.args[3] === "set-titles-string")?.args.at(-1)).toBe("GJC: repo-feature/##S/demo");
+		expect(
+			calls.some(
+				call => call.args[3] === "@gjc-root-terminal-title" && call.args[4] === "GJC: repo-feature/#S/demo",
+			),
+		).toBe(true);
+		expect(calls.find(call => call.args[3] === "set-titles-string")?.args.at(-1)).toBe(
+			"#{?#{==:#{@gjc-root-terminal-title-session},#{session_name}},#{@gjc-root-terminal-title},GJC: #{session_name}}",
+		);
 	});
 
 	it("honors title opt-out while launching managed tmux", () => {
@@ -346,6 +390,51 @@ describe("default GJC tmux launch", () => {
 		expect(plan?.innerCommand).not.toContain("'--tmux'");
 		expect(plan.innerCommand).toContain("GJC_COORDINATOR_SESSION_ID=");
 		expect(plan.innerCommand).toContain("GJC_COORDINATOR_SESSION_STATE_FILE=");
+		expect(plan.innerCommand).toContain("tmux-exit.json");
+		expect(plan.innerCommand).toContain("trap __gjc_tmux_write_exit_marker EXIT");
+		expect(plan.innerCommand).not.toStartWith("exec ");
+	});
+
+	it("POSIX tmux inner wrapper writes a public-safe exit marker and preserves exit status", () => {
+		if (process.platform === "win32") return;
+		const cwd = fs.mkdtempSync(path.join("/tmp", "gjc-tmux-exit-marker-"));
+		try {
+			const plan = buildDefaultTmuxLaunchPlan({
+				parsed: args({ messages: ["-c", "exit 7"], tmux: true }),
+				rawArgs: ["--tmux", "-c", "exit 7"],
+				cwd,
+				env: {},
+				argv: ["bun", "/bin/sh"],
+				execPath: "/bin/bun",
+				platform: "linux",
+				tty: interactiveTty,
+				tmuxAvailable: true,
+				currentBranch: "",
+				existingBranchSessionName: null,
+			});
+			expect(plan).toBeDefined();
+			if (!plan) throw new Error("expected tmux plan");
+
+			const result = Bun.spawnSync(["/bin/sh", "-c", plan.innerCommand], {
+				cwd,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(result.exitCode).toBe(7);
+
+			expect(plan.sessionStateFile).toBeTruthy();
+			if (!plan.sessionStateFile) throw new Error("expected session state file");
+			const markerPath = path.join(path.dirname(plan.sessionStateFile), "tmux-exit.json");
+			const marker = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Record<string, unknown>;
+			expect(marker).toEqual({
+				schema_version: 1,
+				source: "tmux_inner_shell",
+				ended_at: expect.any(String),
+				exit_code: 7,
+			});
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
 	});
 
 	it("sizes detached tmux new-session to the caller terminal when dimensions are known", () => {
@@ -1690,6 +1779,9 @@ it("emits a BOM-less UTF-16LE encoded command and a direct `&` invocation for na
 	// is `& 'cmd' 'arg1' 'arg2'`, which is exactly what buildWindowsPowerShell
 	// InnerCommand produces below.
 	expect(script).toMatch(/&\s+'/);
+	expect(script).toContain("tmux-exit.json");
+	expect(script).toContain("finally {");
+	expect(script).toContain("Set-Content -LiteralPath");
 });
 
 it("captures psmux stderr in the attach-failed diagnostic", () => {
