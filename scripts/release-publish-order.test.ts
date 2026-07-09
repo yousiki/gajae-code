@@ -295,7 +295,7 @@ describe("native release binary coverage", () => {
 
 		expect(workflow).toContain("{ os: macos-26, platform: darwin, arch: arm64 }");
 		expect(workflow).toContain("target_id: darwin-arm64");
-		expect(workflow).toContain("os: ubuntu-26.04,");
+		expect(workflow).toContain("os: ubuntu-24.04,");
 		expect(workflow).toContain("target_id: linux-x64");
 		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
 

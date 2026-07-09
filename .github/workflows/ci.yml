@@ -27,7 +27,7 @@ jobs:
    rust-hash:
       timeout-minutes: 15
       if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       outputs:
          hash: ${{ steps.compute.outputs.hash }}
          run-id: ${{ steps.find.outputs.run-id }}
@@ -83,7 +83,7 @@ jobs:
       name: relevance
       timeout-minutes: 10
       if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       outputs:
          relevant: ${{ steps.relevance.outputs.relevant }}
       steps:
@@ -101,7 +101,7 @@ jobs:
    gjc-state-gates:
       name: gjc-state-gates
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       timeout-minutes: 15
       env:
          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
@@ -131,7 +131,7 @@ jobs:
       needs: [relevance]
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && needs.relevance.outputs.relevant == 'true' &&
          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
          - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
@@ -159,7 +159,7 @@ jobs:
       if: ${{ needs.relevance.outputs.relevant == 'true' &&
          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
          (startsWith(github.ref, 'refs/tags/v') || needs.rust-hash.outputs.run-id == '') }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       strategy:
          fail-fast: false
          matrix:
@@ -204,7 +204,7 @@ jobs:
               save_cache: ${{ github.event_name == 'push' && ((github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') || startsWith(github.ref, 'refs/tags/v')) }}
 
    test:
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       needs: [native_linux, rust-hash, relevance]
       if: ${{ !cancelled() && needs.relevance.outputs.relevant == 'true' &&
          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -266,7 +266,7 @@ jobs:
       needs: [relevance]
       if: ${{ !startsWith(github.ref, 'refs/tags/v') && needs.relevance.outputs.relevant == 'true' &&
          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       steps:
          - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -314,7 +314,7 @@ jobs:
          matrix:
             include:
                - {
-                    os: ubuntu-26.04,
+                    os: ubuntu-24.04,
                     platform: linux,
                     arch: x64,
                     target_id: linux-x64,
@@ -383,7 +383,7 @@ jobs:
          startsWith(github.ref, 'refs/tags/v') && !cancelled() &&
          needs.release_binary.result == 'success' }}
       needs: [release_binary]
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       permissions:
          contents: write
       steps:
@@ -430,7 +430,7 @@ jobs:
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
       needs: [release_binary, release_github_verify, rust-hash]
-      runs-on: ubuntu-26.04
+      runs-on: ubuntu-24.04
       permissions:
          contents: read
          id-token: write
