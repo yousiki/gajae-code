@@ -2,20 +2,7 @@
 
 ## [Unreleased]
 
-## [0.9.1-yousiki.2] - 2026-07-08
-### Fixed
-
-- Startup update notices now use fork release ordering, so `0.9.1-yousiki.1` does not report upstream `0.9.1` as a newer version.
-
-## [0.9.1-yousiki.1] - 2026-07-08
-
-### Changed
-
-- Release publishing now targets the fork namespace `@yousiki-gajae-code/*`, and GitHub Actions no longer build or publish Intel macOS (`darwin-x64`) artifacts while moving fork CI/release jobs to macOS 26 and Ubuntu 26.04 runners.
-- Fork releases now enforce `<upstream-version>-yousiki.<revision>` versions in `scripts/release.ts`, so fork package versions stay tied to their upstream base while retaining a monotonic fork revision.
-- Release publishing now targets the fork namespace `@yousiki-gajae-code/*`, and GitHub Actions only build/publish macOS 26 Apple Silicon (`darwin-arm64`) and Linux x64 artifacts while omitting Intel macOS, Linux arm64, and Windows x64 release binaries.
-- Removed the decorative GJC logo segment from the `full` and `nerd` status-line presets so those layouts start with informational status data instead of the lobster mark.
-## [0.9.2] - 2026-07-09
+## [0.9.2-yousiki.1] - 2026-07-09
 ### Added
 
 - Added `gjc --credential <selector>` for pinning a stored provider credential by `email:`, `id:`, `account:`, `project:`, or `provider/email:` during a session.
@@ -33,6 +20,20 @@
 - Composer queue submissions (`Alt+Q` / `app.message.queue`) force one-at-a-time follow-up delivery, including replay after compaction, without disabling broader batch mode for other follow-up callers.
 - `--credential` now rejects a missing selector immediately instead of falling through into session launch with no output.
 - `gjc-session` prompt/monitor postmortem helpers now work on macOS's system Bash/Python, so missing tmux sessions write the public-safe `vanished.json` marker and prompt injection exits through the guarded refusal path.
+
+## [0.9.1-yousiki.2] - 2026-07-08
+### Fixed
+
+- Startup update notices now use fork release ordering, so `0.9.1-yousiki.1` does not report upstream `0.9.1` as a newer version.
+
+## [0.9.1-yousiki.1] - 2026-07-08
+
+### Changed
+
+- Release publishing now targets the fork namespace `@yousiki-gajae-code/*`, and GitHub Actions no longer build or publish Intel macOS (`darwin-x64`) artifacts while moving fork CI/release jobs to macOS 26 and Ubuntu 26.04 runners.
+- Fork releases now enforce `<upstream-version>-yousiki.<revision>` versions in `scripts/release.ts`, so fork package versions stay tied to their upstream base while retaining a monotonic fork revision.
+- Release publishing now targets the fork namespace `@yousiki-gajae-code/*`, and GitHub Actions only build/publish macOS 26 Apple Silicon (`darwin-arm64`) and Linux x64 artifacts while omitting Intel macOS, Linux arm64, and Windows x64 release binaries.
+- Removed the decorative GJC logo segment from the `full` and `nerd` status-line presets so those layouts start with informational status data instead of the lobster mark.
 
 ## [0.9.1] - 2026-07-08
 

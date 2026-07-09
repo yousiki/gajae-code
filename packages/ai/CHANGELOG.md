@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.9.2] - 2026-07-09
+## [0.9.2-yousiki.1] - 2026-07-09
 ### Added
 
 - Added runtime credential selectors so callers can pin stored multi-account credentials by id, email, account id, or project id instead of using automatic rotation/ranking.
